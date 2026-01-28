@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "Fireside South Peak",
+    "slug": "fireside-south-peak",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#3b3b3b"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fireside.southpeak",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs access to your camera to capture photos of building elements.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select images for reports."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#3b3b3b"
+      },
+      "package": "com.fireside.southpeak",
+      "navigationBar": {
+        "backgroundColor": "#3b3b3b"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.ico"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Fireside to access your camera to capture photos of building elements."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff"
+        }
+      ],
+      "expo-font"
+    ],
+    "scheme": "fireside",
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "your-project-id"
+      }
+    }
+  }
+}
