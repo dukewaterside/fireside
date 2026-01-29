@@ -25,6 +25,7 @@ export interface SignUpData {
   password: string;        // User's password
   role: UserRole;         // User's role in the system
   trade?: Trade;          // User's trade (only if they're a subcontractor, optional)
+  assignedUnitIds?: string[]; // Unit UUIDs (only if Project Manager or Internal Developer)
 }
 
 /**
@@ -121,17 +122,9 @@ export async function signUp(signUpData: SignUpData): Promise<AuthResponse> {
     });
 
     if (authError) {
-      // Provide helpful error messages
-      let errorMessage = authError.message || 'Failed to create account';
-      
-      // Handle rate limit errors with a helpful message
-      if (authError.message?.includes('rate limit') || authError.message?.includes('429')) {
-        errorMessage = 'Too many signup attempts. Please wait 15-30 minutes before trying again, or use a different email address.';
-      }
-      
       return {
         success: false,
-        error: errorMessage,
+        error: authError.message || 'Failed to create account',
       };
     }
 

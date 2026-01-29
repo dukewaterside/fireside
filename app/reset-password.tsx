@@ -132,7 +132,7 @@ export default function ResetPasswordScreen() {
       Alert.alert(
         'Password updated',
         'You can now sign in with your new password.',
-        [{ text: 'OK', onPress: () => router.replace('/') }]
+        [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
@@ -188,7 +188,7 @@ export default function ResetPasswordScreen() {
       Alert.alert(
         'Password updated',
         'You can now sign in with your new password.',
-        [{ text: 'OK', onPress: () => router.replace('/') }]
+        [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
@@ -281,7 +281,7 @@ export default function ResetPasswordScreen() {
             ) : null}
             <LogginButton
               label="Back to login"
-              onPress={() => router.replace('/')}
+              onPress={() => router.replace('/sign-in')}
               backgroundColor="#4a4a4a"
             />
           </>

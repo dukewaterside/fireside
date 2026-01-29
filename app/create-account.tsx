@@ -1,27 +1,28 @@
 // Import React hooks for managing component state
-import React, { useState } from 'react';
-// Import React Native components for building the UI
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
   ScrollView,
-  Alert
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 // Import SafeAreaView to handle notches and safe areas on different devices
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Import router from Expo Router for navigation
 import { router } from 'expo-router';
 // Import fonts
-import { useFonts, Inter_400Regular } from '@expo-google-fonts/inter';
-// Import our custom button component
+import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { LogginButton } from '../components/LogginButton';
 // Import our custom picker component (better UX than native Picker)
 import { CustomPicker } from '../components/CustomPicker';
+import { CustomMultiPicker } from '../components/CustomMultiPicker';
 // Import our auth service and types
 import { signUp, UserRole, Trade, SignUpData } from '../lib/services/auth';
+import { supabase } from '../lib/supabase/client';
 
 export default function CreateAccount() {
   // State variables to store form input values
@@ -41,16 +42,44 @@ export default function CreateAccount() {
   
   // State for the trade dropdown (only shown for subcontractors)
   const [trade, setTrade] = useState<Trade | ''>('');
-  
+
+  // State for assigned units (PM / Internal Developer)
+  const [units, setUnits] = useState<{ id: string; unit_number: string }[]>([]);
+  const [unitsLoading, setUnitsLoading] = useState(false);
+  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
+
   // State to track if we're currently submitting the form (for loading state)
   const [isLoading, setIsLoading] = useState(false);
-  
+
   // State to store any error messages to display to the user
   const [error, setError] = useState('');
+
+  const isPMOrID = role === 'Project Manager' || role === 'Internal Developer';
+
+  const fetchUnits = useCallback(async () => {
+    setUnitsLoading(true);
+    setUnits([]);
+    const { data, error: e } = await supabase
+      .from('units')
+      .select('id, unit_number')
+      .order('unit_number', { ascending: true });
+    setUnitsLoading(false);
+    if (e) {
+      console.warn('[CreateAccount] Failed to load units:', e.message);
+      return;
+    }
+    setUnits((data as { id: string; unit_number: string }[]) ?? []);
+  }, []);
+
+  useEffect(() => {
+    if (isPMOrID) fetchUnits();
+    else setSelectedUnitIds([]);
+  }, [isPMOrID, fetchUnits]);
 
   // Load fonts (same pattern as login page)
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
+    Inter_600SemiBold,
   });
 
   // Don't render anything until fonts are loaded
@@ -122,6 +151,12 @@ export default function CreateAccount() {
       return false;
     }
 
+    // If role is Project Manager or Internal Developer, at least one unit is required
+    if (isPMOrID && selectedUnitIds.length === 0) {
+      setError('Please select at least one assigned unit');
+      return false;
+    }
+
     // All validations passed!
     return true;
   };
@@ -141,37 +176,68 @@ export default function CreateAccount() {
     setError(''); // Clear any previous errors
 
     try {
-      // Prepare the data object that matches our SignUpData interface
       const signUpData: SignUpData = {
-        firstName: firstName.trim(),      // Trim removes leading/trailing spaces
+        firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone: phone.trim(),
-        email: email.trim().toLowerCase(), // Convert to lowercase for consistency
+        email: email.trim().toLowerCase(),
         password: password,
-        role: role as UserRole,            // Type assertion since we validated it's not empty
-        trade: role === 'Subcontractor' ? (trade as Trade) : undefined, // Only include trade if subcontractor
+        role: role as UserRole,
+        trade: role === 'Subcontractor' ? (trade as Trade) : undefined,
+        assignedUnitIds: isPMOrID && selectedUnitIds.length > 0 ? selectedUnitIds : undefined,
       };
 
-      // Call our signUp function from the auth service
-      // The 'await' keyword waits for this async operation to complete
       const response = await signUp(signUpData);
 
-      // Check if signup was successful
-      if (response.success) {
-        // Show success message
+      if (response.success && response.user?.id) {
+        const userId = response.user.id;
+
+        if (isPMOrID && selectedUnitIds.length > 0) {
+          const assignmentType =
+            role === 'Project Manager' ? 'project_manager' : 'internal_developer';
+          const rows = selectedUnitIds.map((unit_id) => ({
+            user_id: userId,
+            unit_id,
+            assignment_type: assignmentType,
+          }));
+
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session || session.user?.id !== userId) {
+            await new Promise((r) => setTimeout(r, 600));
+          }
+
+          const { error: insertError } = await supabase
+            .from('unit_assignments')
+            .insert(rows);
+
+          if (insertError) {
+            console.error('[CreateAccount] unit_assignments insert failed:', insertError);
+            Alert.alert(
+              'Account created',
+              'Your account was created, but we could not save your unit assignments. Please sign in and contact an owner to assign your units.',
+              [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
+            );
+          } else {
+            Alert.alert(
+              'Account Created!',
+              'Your account has been created successfully. You can now sign in.',
+              [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
+            );
+          }
+        } else {
+          Alert.alert(
+            'Account Created!',
+            'Your account has been created successfully. You can now sign in.',
+            [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
+          );
+        }
+      } else if (response.success) {
         Alert.alert(
           'Account Created!',
           'Your account has been created successfully. You can now sign in.',
-          [
-            {
-              text: 'OK',
-              // Navigate back to the login page after user taps OK
-              onPress: () => router.replace('/'),
-            },
-          ]
+          [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
         );
       } else {
-        // If signup failed, show the error message
         setError(response.error || 'Failed to create account');
       }
     } catch (err) {
@@ -274,9 +340,9 @@ export default function CreateAccount() {
             selectedValue={role}
             onValueChange={(itemValue) => {
               setRole(itemValue);
-              // If user changes role away from Subcontractor, clear the trade selection
-              if (itemValue !== 'Subcontractor') {
-                setTrade('');
+              if (itemValue !== 'Subcontractor') setTrade('');
+              if (itemValue !== 'Project Manager' && itemValue !== 'Internal Developer') {
+                setSelectedUnitIds([]);
               }
             }}
             placeholder="Select Role"
@@ -304,8 +370,31 @@ export default function CreateAccount() {
                 { label: 'Countertops', value: 'Countertops' },
                 { label: 'Flooring', value: 'Flooring' },
               ]}
-              hasError={error.includes('trade')} // Show error styling if trade validation failed
+              hasError={error.includes('trade')}
             />
+          )}
+
+          {/* Assigned units dropdown - only for Project Manager / Internal Developer */}
+          {(role === 'Project Manager' || role === 'Internal Developer') && (
+            <>
+              {unitsLoading ? (
+                <View style={styles.unitLoading}>
+                  <ActivityIndicator size="small" color="#f2681c" />
+                  <Text style={styles.unitLoadingText}>Loading units…</Text>
+                </View>
+              ) : (
+                <CustomMultiPicker
+                  selectedValues={selectedUnitIds}
+                  onValueChange={setSelectedUnitIds}
+                  items={units.map((u) => ({ label: u.unit_number, value: u.id }))}
+                  placeholder="Select units (by unit number)"
+                  hasError={error.includes('assigned unit')}
+                />
+              )}
+              {error.includes('assigned unit') && (
+                <Text style={styles.unitError}>Please select at least one assigned unit</Text>
+              )}
+            </>
           )}
 
           {/* Create Account Button */}
@@ -384,5 +473,22 @@ const styles = StyleSheet.create({
     color: '#f2681c',
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
+  },
+  unitLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 20,
+  },
+  unitLoadingText: {
+    fontSize: 16,
+    color: '#999',
+    fontFamily: 'Inter_400Regular',
+  },
+  unitError: {
+    fontSize: 12,
+    color: '#f2681c',
+    marginTop: 6,
   },
 });

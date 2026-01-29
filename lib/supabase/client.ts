@@ -6,8 +6,10 @@ import { createClient } from '@supabase/supabase-js';
 // React Native doesn't have the URL API that web browsers have, so this adds it
 import 'react-native-url-polyfill/auto';
 
-// AsyncStorage is React Native's way of storing data persistently on the device
-// We need this so Supabase can save the user's session (login state) even after the app closes
+// AsyncStorage is React Native's way of storing data persistently on the device.
+// We need this so Supabase can save the user's session (login state) even after the app closes.
+// With storage + persistSession + autoRefreshToken, users stay signed in when they reopen the app
+// (no need to sign in again each time — same on iOS and Android).
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import our configuration constants (the Supabase URL and key)

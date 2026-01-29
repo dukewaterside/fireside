@@ -1,0 +1,732 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+  Modal,
+  Pressable,
+  FlatList,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
+import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import { CustomPicker } from '../../components/CustomPicker';
+import { supabase } from '../../lib/supabase/client';
+import { uploadTicketPhoto } from '../../lib/services/tickets';
+import { ROLE_TYPE_OPTIONS, type ProfileRole } from '../../lib/constants/tickets';
+
+const BUILDING_OPTIONS = [
+  { label: 'Framing', value: 'framing' },
+  { label: 'Electrical', value: 'electrical' },
+  { label: 'Plumbing', value: 'plumbing' },
+  { label: 'HVAC', value: 'hvac' },
+  { label: 'Countertops', value: 'countertops' },
+  { label: 'Flooring', value: 'flooring' },
+  { label: 'Painting', value: 'painting' },
+  { label: 'Windows & Doors', value: 'windows_doors' },
+  { label: 'Roofing', value: 'roofing' },
+  { label: 'Insulation', value: 'insulation' },
+  { label: 'Drywall', value: 'drywall' },
+  { label: 'Other', value: 'other' },
+];
+
+const PRIORITY_OPTIONS = [
+  { label: 'Low', value: 'low' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'High', value: 'high' },
+];
+
+type BuildingElement = (typeof BUILDING_OPTIONS)[number]['value'];
+type Priority = (typeof PRIORITY_OPTIONS)[number]['value'];
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUuid(s: string): boolean {
+  return UUID_REGEX.test(s);
+}
+
+type NotifyProfile = { id: string; first_name: string | null; last_name: string | null; email: string | null };
+
+export default function CreateTicketScreen() {
+  const params = useLocalSearchParams<{ unitId: string; unitName: string; photoUri: string }>();
+  const unitId = params.unitId ?? '';
+  const unitName = params.unitName ?? 'Unit';
+  const initialPhotoUri = params.photoUri ?? '';
+
+  const [photos, setPhotos] = useState<string[]>(initialPhotoUri ? [initialPhotoUri] : []);
+  const [buildingElement, setBuildingElement] = useState<BuildingElement | ''>('');
+  const [priority, setPriority] = useState<Priority | ''>('medium');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const [notifyModalVisible, setNotifyModalVisible] = useState(false);
+  const [notifyStep, setNotifyStep] = useState<'type' | 'profiles'>('type');
+  const [notifySelectedRole, setNotifySelectedRole] = useState<ProfileRole | null>(null);
+  const [notifyProfiles, setNotifyProfiles] = useState<NotifyProfile[]>([]);
+  const [notifyProfilesLoading, setNotifyProfilesLoading] = useState(false);
+  const [notifySelectedUserIds, setNotifySelectedUserIds] = useState<string[]>([]);
+
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_600SemiBold,
+  });
+
+  const handleRetakePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Camera access', 'Camera permission is needed to take a photo.', [{ text: 'OK' }]);
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setPhotos([result.assets[0].uri]);
+    }
+  };
+
+  const handleAddFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Photo library', 'Permission is needed to pick photos.', [{ text: 'OK' }]);
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      selectionLimit: 0,
+    });
+    if (!result.canceled && result.assets.length) {
+      const newUris = result.assets.map((a) => a.uri);
+      setPhotos((prev) => [...prev, ...newUris]);
+    }
+  };
+
+  const removePhoto = (index: number) => {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const openNotifyModal = useCallback(() => {
+    setNotifyStep('type');
+    setNotifySelectedRole(null);
+    setNotifyProfiles([]);
+    setNotifyModalVisible(true);
+  }, []);
+
+  const closeNotifyModal = useCallback(() => {
+    setNotifyModalVisible(false);
+    setNotifyStep('type');
+    setNotifySelectedRole(null);
+    setNotifyProfiles([]);
+  }, []);
+
+  const onNotifySelectType = useCallback(async (role: ProfileRole) => {
+    setNotifySelectedRole(role);
+    setNotifyProfilesLoading(true);
+    setNotifyProfiles([]);
+    setNotifyStep('profiles');
+    const { data, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('id, first_name, last_name, email')
+      .eq('role', role)
+      .eq('status', 'active')
+      .order('first_name');
+    setNotifyProfilesLoading(false);
+    if (!fetchErr && data?.length) {
+      setNotifyProfiles(data as NotifyProfile[]);
+    } else {
+      setNotifyProfiles([]);
+    }
+  }, []);
+
+  const onNotifyBackToType = useCallback(() => {
+    setNotifyStep('type');
+    setNotifySelectedRole(null);
+    setNotifyProfiles([]);
+  }, []);
+
+  const toggleNotifyProfile = useCallback((userId: string) => {
+    setNotifySelectedUserIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  }, []);
+
+  const handleSubmit = async () => {
+    setError('');
+    if (!buildingElement) {
+      setError('Please select a building element.');
+      return;
+    }
+    if (!unitId) {
+      setError('Missing unit. Go back and select a unit again.');
+      return;
+    }
+    if (!isValidUuid(unitId)) {
+      setError('Invalid unit. Please go back to Home, wait for the unit list to load, then select a unit and create a ticket again.');
+      return;
+    }
+    if (photos.length === 0) {
+      setError('Add at least one photo (retake or add from library).');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError('You must be signed in to create a ticket.');
+        setLoading(false);
+        return;
+      }
+
+      const photoUrls: string[] = [];
+      for (const uri of photos) {
+        const url = await uploadTicketPhoto(uri, user.id);
+        photoUrls.push(url);
+      }
+
+      const { data: insertedTicket, error: insertError } = await supabase
+        .from('tickets')
+        .insert({
+          unit_id: unitId,
+          created_by: user.id,
+          photo_url: photoUrls[0],
+          photo_urls: photoUrls,
+          building_element: buildingElement,
+          priority: priority || 'medium',
+          notes: notes.trim() || null,
+          status: 'open',
+        })
+        .select('id')
+        .single();
+
+      if (insertError) {
+        setError(insertError.message || 'Failed to create ticket.');
+        setLoading(false);
+        return;
+      }
+
+      const ticketId = insertedTicket?.id;
+      if (ticketId) {
+        const { data: unitRow } = await supabase
+          .from('units')
+          .select('project_manager_id')
+          .eq('id', unitId)
+          .single();
+        const pmId = (unitRow as { project_manager_id: string | null } | null)?.project_manager_id ?? null;
+        const assignUserIds = [...new Set([pmId, ...notifySelectedUserIds].filter(Boolean))] as string[];
+        if (assignUserIds.length > 0) {
+          const { error: assignError } = await supabase.from('ticket_assignments').insert(
+            assignUserIds.map((uid) => ({ ticket_id: ticketId, user_id: uid }))
+          );
+          if (assignError) {
+            setError(assignError.message || 'Ticket created but failed to assign users.');
+            setLoading(false);
+            return;
+          }
+        }
+      }
+
+      router.replace('/tickets');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setLoading(false);
+    }
+  };
+
+  if (!fontsLoaded) return null;
+
+  const missingParams = !unitId;
+  if (missingParams) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Create Ticket</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>Missing unit or photo. Go back and create a ticket from a unit.</Text>
+          <TouchableOpacity style={styles.backToTicketsButton} onPress={() => router.replace('/tickets')}>
+            <Text style={styles.backToTicketsButtonText}>Back to Tickets</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Create Ticket</Text>
+        <View style={styles.headerRight} />
+      </View>
+
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      >
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.unitLabel}>{unitName}</Text>
+
+          <Text style={styles.fieldLabel}>Photos</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.photosScrollContent}
+            style={styles.photosScroll}
+          >
+            {photos.length === 0 ? (
+              <View style={styles.photoPlaceholder}>
+                <Ionicons name="images-outline" size={40} color="#666" />
+                <Text style={styles.photoPlaceholderText}>No photos yet</Text>
+              </View>
+            ) : (
+              photos.map((uri, index) => (
+                <View key={`${uri}-${index}`} style={styles.photoThumbWrap}>
+                  <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={styles.photoRemoveBtn}
+                    onPress={() => removePhoto(index)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle" size={24} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+          </ScrollView>
+          <View style={styles.photoActions}>
+            <TouchableOpacity style={styles.photoActionButton} onPress={handleRetakePhoto}>
+              <Ionicons name="camera-outline" size={20} color="#fff" />
+              <Text style={styles.photoActionButtonText}>Retake</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.photoActionButton} onPress={handleAddFromLibrary}>
+              <Ionicons name="images-outline" size={20} color="#fff" />
+              <Text style={styles.photoActionButtonText}>Add from library</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.fieldLabel}>Building element</Text>
+          <CustomPicker<BuildingElement>
+            selectedValue={buildingElement}
+            onValueChange={setBuildingElement}
+            items={BUILDING_OPTIONS}
+            placeholder="Select element"
+            hasError={!!error && !buildingElement}
+          />
+
+          <Text style={styles.fieldLabel}>Priority</Text>
+          <CustomPicker<Priority>
+            selectedValue={priority}
+            onValueChange={setPriority}
+            items={PRIORITY_OPTIONS}
+            placeholder="Select priority"
+          />
+
+          <Text style={styles.fieldLabel}>Notes (optional)</Text>
+          <TextInput
+            style={styles.notesInput}
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="Describe the issue..."
+            placeholderTextColor="#888"
+            multiline
+            numberOfLines={4}
+            textAlignVertical="top"
+          />
+
+          <Text style={styles.fieldLabel}>Assign to user</Text>
+          <TouchableOpacity style={styles.notifyButton} onPress={openNotifyModal}>
+            <Ionicons name="people-outline" size={20} color="#fff" />
+            <Text style={styles.notifyButtonText}>
+              {notifySelectedUserIds.length === 0
+                ? 'Assign to users (optional; unit PM is auto-assigned)'
+                : `${notifySelectedUserIds.length} person${notifySelectedUserIds.length === 1 ? '' : 's'} assigned`}
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          <TouchableOpacity
+            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle-outline" size={22} color="#fff" />
+                <Text style={styles.submitButtonText}>Submit Ticket</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={notifyModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeNotifyModal}
+      >
+        <Pressable style={styles.notifyModalBackdrop} onPress={closeNotifyModal}>
+          <View style={styles.notifyModalContent} onStartShouldSetResponder={() => true}>
+            <View style={styles.notifyModalHeader}>
+              <View style={styles.notifyHeaderLeft}>
+                {notifyStep === 'profiles' && (
+                  <TouchableOpacity style={styles.notifyBackButton} onPress={onNotifyBackToType}>
+                    <Ionicons name="arrow-back" size={24} color="#fff" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={styles.notifyModalTitle}>
+                {notifyStep === 'type' ? 'Assign by role' : 'Select people to assign'}
+              </Text>
+              <TouchableOpacity style={styles.notifyHeaderRight} onPress={closeNotifyModal}>
+                <Text style={styles.notifyCloseButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            {notifyStep === 'type' && (
+              <FlatList
+                data={ROLE_TYPE_OPTIONS}
+                keyExtractor={(item) => item.value}
+                contentContainerStyle={styles.notifyListContent}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.notifyOptionItem}
+                    onPress={() => onNotifySelectType(item.value)}
+                  >
+                    <Text style={styles.notifyOptionText}>{item.label}</Text>
+                    <Ionicons name="chevron-forward" size={20} color="#999" />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+            {notifyStep === 'profiles' && (
+              <>
+                {notifyProfilesLoading ? (
+                  <View style={styles.notifyLoadingWrap}>
+                    <ActivityIndicator size="large" color="#f2681c" />
+                  </View>
+                ) : notifyProfiles.length === 0 ? (
+                  <View style={styles.notifyEmptyWrap}>
+                    <Text style={styles.notifyEmptyText}>No active profiles with this role.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={notifyProfiles}
+                    keyExtractor={(p) => p.id}
+                    contentContainerStyle={styles.notifyListContent}
+                    renderItem={({ item }) => {
+                      const selected = notifySelectedUserIds.includes(item.id);
+                      const name = [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || 'Unknown';
+                      return (
+                        <TouchableOpacity
+                          style={[styles.notifyOptionItem, selected && styles.notifyOptionItemSelected]}
+                          onPress={() => toggleNotifyProfile(item.id)}
+                        >
+                          <Text style={styles.notifyOptionText}>{name}</Text>
+                          {selected && <Ionicons name="checkmark-circle" size={22} color="#f2681c" />}
+                        </TouchableOpacity>
+                      );
+                    }}
+                  />
+                )}
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#3b3b3b',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4a4a4a',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  headerRight: {
+    width: 40,
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  unitLabel: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  photosScroll: {
+    marginBottom: 8,
+  },
+  photosScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 8,
+  },
+  photoPlaceholder: {
+    width: 120,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: '#4a4a4a',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoPlaceholderText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#666',
+    marginTop: 6,
+  },
+  photoThumbWrap: {
+    position: 'relative',
+  },
+  photoThumb: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: '#4a4a4a',
+  },
+  photoRemoveBtn: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#333',
+    borderRadius: 12,
+  },
+  photoActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  photoActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#4a4a4a',
+    borderRadius: 8,
+  },
+  photoActionButtonText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  fieldLabel: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#999',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  notesInput: {
+    backgroundColor: '#4a4a4a',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+    minHeight: 100,
+    marginBottom: 16,
+  },
+  errorText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#f2681c',
+    marginBottom: 12,
+  },
+  submitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f2681c',
+    borderRadius: 8,
+    paddingVertical: 14,
+    marginTop: 8,
+  },
+  submitButtonDisabled: {
+    opacity: 0.7,
+  },
+  submitButtonText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  backToTicketsButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    backgroundColor: '#f2681c',
+    borderRadius: 8,
+  },
+  backToTicketsButtonText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  notifyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#4a4a4a',
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  notifyButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+  },
+  notifyModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  notifyModalContent: {
+    backgroundColor: '#3b3b3b',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+    paddingBottom: 20,
+  },
+  notifyModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4a4a4a',
+  },
+  notifyHeaderLeft: {
+    width: 80,
+    alignItems: 'flex-start',
+  },
+  notifyHeaderRight: {
+    width: 80,
+    alignItems: 'flex-end',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  notifyBackButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  notifyModalTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+    textAlign: 'center',
+  },
+  notifyCloseButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  notifyCloseButtonText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#f2681c',
+  },
+  notifyListContent: {
+    paddingBottom: 20,
+  },
+  notifyOptionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4a4a4a',
+  },
+  notifyOptionItemSelected: {
+    backgroundColor: '#4a4a4a',
+  },
+  notifyOptionText: {
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+  },
+  notifyLoadingWrap: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  notifyEmptyWrap: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  notifyEmptyText: {
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#999',
+  },
+});
