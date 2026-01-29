@@ -47,6 +47,9 @@ yarn-error.log
 # TypeScript
 *.tsbuildinfo
 
+# Test coverage
+coverage/
+
 # IDE
 .vscode/
 .idea/
