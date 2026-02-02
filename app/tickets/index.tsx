@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { navigateToSignIn } from '../../lib/navigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
@@ -32,6 +32,9 @@ type TicketRow = {
 };
 
 export default function TicketsScreen() {
+  const params = useLocalSearchParams<{ unitId?: string }>();
+  const unitId = params.unitId ?? '';
+
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -49,16 +52,20 @@ export default function TicketsScreen() {
       setTickets([]);
       return;
     }
-    let { data, error } = await supabase
+    let query = supabase
       .from('tickets')
       .select('id, unit_id, created_by, photo_url, building_element, priority, notes, status, created_at, units(unit_number)')
       .order('created_at', { ascending: false });
+    if (unitId) query = query.eq('unit_id', unitId);
+    let { data, error } = await query;
 
     if (error) {
-      const { data: dataNoJoin, error: errorNoJoin } = await supabase
+      let fallback = supabase
         .from('tickets')
         .select('id, unit_id, created_by, photo_url, building_element, priority, notes, status, created_at')
         .order('created_at', { ascending: false });
+      if (unitId) fallback = fallback.eq('unit_id', unitId);
+      const { data: dataNoJoin, error: errorNoJoin } = await fallback;
       if (!errorNoJoin && dataNoJoin?.length) {
         setTickets((dataNoJoin as TicketRow[]).map((t) => ({ ...t, units: null })));
         return;
@@ -68,7 +75,7 @@ export default function TicketsScreen() {
       return;
     }
     setTickets((data as TicketRow[]) ?? []);
-  }, []);
+  }, [unitId]);
 
   useFocusEffect(
     useCallback(() => {

@@ -1,13 +1,22 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { supabase } from '../lib/supabase/client';
+import { setNotificationResponseHandler } from '../lib/notifications/push';
 
 export default function RootLayout() {
   const segments = useSegments();
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
+
+  useEffect(() => {
+    const remove = setNotificationResponseHandler();
+    return remove;
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
+    const getFirstSegment = () => (segmentsRef.current?.[0] ?? null);
 
     // Only redirect when user IS signed in (to tabs or pending-approval).
     // When signed out we do NOT redirect — screens show sign-in prompts and block actions.
@@ -23,7 +32,7 @@ export default function RootLayout() {
 
       if (!isMounted) return;
       const status = profile?.status ?? 'active';
-      const firstSegment = segments[0];
+      const firstSegment = getFirstSegment();
 
       if (status === 'pending' && firstSegment !== 'pending-approval') {
         router.replace('/pending-approval');
@@ -50,7 +59,7 @@ export default function RootLayout() {
 
       if (!isMounted) return;
       const status = profile?.status ?? 'active';
-      const firstSegment = segments[0];
+      const firstSegment = getFirstSegment();
 
       if (status === 'pending' && firstSegment !== 'pending-approval') {
         router.replace('/pending-approval');
@@ -67,7 +76,7 @@ export default function RootLayout() {
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, [segments]);
+  }, []); // Run once; segmentsRef has latest segments so we don't re-run on every navigation
 
   return (
     <>

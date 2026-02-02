@@ -5,11 +5,11 @@ import {
   StyleSheet,
   Image,
   TouchableOpacity,
-  Pressable,
   ScrollView,
   Dimensions,
   Modal,
   Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
@@ -84,7 +84,33 @@ const UNITS_FALLBACK: { id: string; unit_number: string; map_x: number; map_y: n
   { id: '41', unit_number: 'Hillside 15C', ...r(1882, 888), box: { tl_x: Math.round(1827 * SX), tl_y: Math.round(833 * SY), br_x: Math.round(1937 * SX), br_y: Math.round(943 * SY) } },
 ];
 
-type MapUnit = { id: string; unit_number: string; map_x: number; map_y: number; box?: MapUnitBox };
+type ProfileSnippet = { first_name: string | null; last_name: string | null; phone: string | null };
+type MapUnit = {
+  id: string;
+  unit_number: string;
+  map_x: number;
+  map_y: number;
+  box?: MapUnitBox;
+  project_manager_id?: string | null;
+  designer_id?: string | null;
+  project_manager?: ProfileSnippet | null;
+  designer?: ProfileSnippet | null;
+  open_count?: number;
+};
+
+function displayName(p: ProfileSnippet | null | undefined): string {
+  if (!p) return 'Unassigned';
+  const first = p.first_name?.trim() ?? '';
+  const last = p.last_name?.trim() ?? '';
+  if (first || last) return [first, last].filter(Boolean).join(' ');
+  return 'Unassigned';
+}
+
+function statusColor(openCount: number): string {
+  if (openCount === 0) return '#4ade80';
+  if (openCount <= 5) return '#facc15';
+  return '#f87171';
+}
 
 const SYNTHETIC_BOX_RADIUS = 35; // pixels in map image coords when unit has no box (e.g. from Supabase)
 
@@ -117,6 +143,7 @@ export default function HomeScreen() {
   const [unitsLoaded, setUnitsLoaded] = useState(false);
   const [unitsError, setUnitsError] = useState<string | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<MapUnit | null>(null);
+  const [contactCardPerson, setContactCardPerson] = useState<ProfileSnippet | null>(null);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -155,7 +182,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // Load units from Supabase (with map coords). Usually 1–2 s when connected. Fall back to local list on error/timeout.
+  // Load units from Supabase (with PM/Designer and open ticket count).
   useEffect(() => {
     let cancelled = false;
     const timeoutId = setTimeout(() => {
@@ -166,30 +193,49 @@ export default function HomeScreen() {
     }, UNITS_LOAD_TIMEOUT_MS);
 
     (async () => {
-      const { data, error } = await supabase
+      const selectUnits =
+        'id, unit_number, map_x, map_y, project_manager_id, designer_id, project_manager:profiles!project_manager_id(first_name, last_name, phone), designer:profiles!designer_id(first_name, last_name, phone)';
+      const { data: unitsData, error: unitsError } = await supabase
         .from('units')
-        .select('id, unit_number, map_x, map_y')
+        .select(selectUnits)
         .not('map_x', 'is', null)
         .not('map_y', 'is', null);
       if (cancelled) return;
-      clearTimeout(timeoutId);
-      setUnitsLoaded(true);
-      if (error) {
-        setUnitsError(error.message || 'Could not load units.');
+      if (unitsError) {
+        clearTimeout(timeoutId);
+        setUnitsLoaded(true);
+        setUnitsError(unitsError.message || 'Could not load units.');
         return;
       }
-      if (data?.length) {
+      const { data: openTickets } = await supabase
+        .from('tickets')
+        .select('unit_id')
+        .eq('status', 'open');
+      if (cancelled) return;
+      const countByUnit: Record<string, number> = {};
+      (openTickets ?? []).forEach((r: { unit_id: string }) => {
+        const uid = String(r.unit_id);
+        countByUnit[uid] = (countByUnit[uid] ?? 0) + 1;
+      });
+      clearTimeout(timeoutId);
+      setUnitsLoaded(true);
+      if (unitsData?.length) {
         setUnitsError(null);
         setUnits(
-          data.map((r) => {
+          unitsData.map((r: Record<string, unknown>) => {
             const map_x = Number(r.map_x);
             const map_y = Number(r.map_y);
+            const id = String(r.id);
             return {
-              id: String(r.id),
-              unit_number: r.unit_number ?? '',
+              id,
+              unit_number: (r.unit_number as string) ?? '',
               map_x,
               map_y,
-              // Supabase has no box; synthetic box so tap-by-region still works
+              project_manager_id: r.project_manager_id as string | null,
+              designer_id: r.designer_id as string | null,
+              project_manager: (r.project_manager as ProfileSnippet | null) ?? null,
+              designer: (r.designer as ProfileSnippet | null) ?? null,
+              open_count: countByUnit[id] ?? 0,
               box: {
                 tl_x: map_x - SYNTHETIC_BOX_RADIUS,
                 tl_y: map_y - SYNTHETIC_BOX_RADIUS,
@@ -352,52 +398,90 @@ export default function HomeScreen() {
             onPress={() => {}}
           >
             <Text style={styles.modalTitle}>{selectedUnit?.unit_number ?? 'Unit'}</Text>
-            <Text style={styles.modalSubtitle}>
-              Template info — more details coming soon.
-            </Text>
-            {hasSession ? (
+
+            <View style={styles.statusRow}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor(selectedUnit?.open_count ?? 0) }]} />
+              <Text style={styles.statusLabel}>
+                {selectedUnit?.open_count === 0
+                  ? 'No open tickets'
+                  : `${selectedUnit?.open_count ?? 0} open ticket${(selectedUnit?.open_count ?? 0) === 1 ? '' : 's'}`}
+              </Text>
+            </View>
+
+            <View style={styles.contactRow}>
+              <Text style={styles.contactLabel}>Project Manager</Text>
               <TouchableOpacity
-                style={styles.createTicketButton}
-                onPress={async () => {
-                  const unitForTicket = selectedUnit;
-                  const isRealUnitId = unitForTicket && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unitForTicket.id);
-                  if (!isRealUnitId) {
-                    Alert.alert(
-                      'Unit list loading',
-                      'Please wait for the unit list to load from the server, then select a unit and try again. (The map is showing placeholder data.)',
-                      [{ text: 'OK' }]
-                    );
-                    return;
-                  }
-                  const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                  if (status !== 'granted') {
-                    Alert.alert(
-                      'Camera access',
-                      'Camera permission is needed to attach a photo to the ticket.',
-                      [{ text: 'OK' }]
-                    );
-                    return;
-                  }
-                  const result = await ImagePicker.launchCameraAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: false,
-                  });
-                  setSelectedUnit(null);
-                  if (!result.canceled && result.assets[0] && unitForTicket) {
-                    router.push({
-                      pathname: '/tickets/create',
-                      params: {
-                        unitId: unitForTicket.id,
-                        unitName: unitForTicket.unit_number,
-                        photoUri: result.assets[0].uri,
-                      },
-                    });
-                  }
-                }}
+                onPress={() => selectedUnit?.project_manager && setContactCardPerson(selectedUnit.project_manager)}
               >
-                <Ionicons name="camera-outline" size={20} color="#fff" />
-                <Text style={styles.createTicketButtonText}>Create a ticket</Text>
+                <Text style={styles.contactLink}>{displayName(selectedUnit?.project_manager)}</Text>
               </TouchableOpacity>
+            </View>
+            <View style={styles.contactRow}>
+              <Text style={styles.contactLabel}>Designer</Text>
+              <TouchableOpacity
+                onPress={() => selectedUnit?.designer && setContactCardPerson(selectedUnit.designer)}
+              >
+                <Text style={styles.contactLink}>{displayName(selectedUnit?.designer)}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {hasSession ? (
+              <>
+                <TouchableOpacity
+                  style={styles.createTicketButton}
+                  onPress={async () => {
+                    const unitForTicket = selectedUnit;
+                    const isRealUnitId = unitForTicket && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unitForTicket.id);
+                    if (!isRealUnitId) {
+                      Alert.alert(
+                        'Unit list loading',
+                        'Please wait for the unit list to load from the server, then select a unit and try again. (The map is showing placeholder data.)',
+                        [{ text: 'OK' }]
+                      );
+                      return;
+                    }
+                    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                    if (status !== 'granted') {
+                      Alert.alert(
+                        'Camera access',
+                        'Camera permission is needed to attach a photo to the ticket.',
+                        [{ text: 'OK' }]
+                      );
+                      return;
+                    }
+                    const result = await ImagePicker.launchCameraAsync({
+                      mediaTypes: ['images'],
+                      allowsEditing: false,
+                    });
+                    setSelectedUnit(null);
+                    if (!result.canceled && result.assets[0] && unitForTicket) {
+                      router.push({
+                        pathname: '/tickets/create',
+                        params: {
+                          unitId: unitForTicket.id,
+                          unitName: unitForTicket.unit_number,
+                          photoUri: result.assets[0].uri,
+                        },
+                      });
+                    }
+                  }}
+                >
+                  <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                  <Text style={styles.createTicketButtonText}>Create a Ticket</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.viewTicketsButton}
+                  onPress={() => {
+                    const unitId = selectedUnit?.id;
+                    setSelectedUnit(null);
+                    if (unitId) router.push({ pathname: '/tickets', params: { unitId } });
+                    else router.push('/tickets');
+                  }}
+                >
+                  <Ionicons name="ticket-outline" size={20} color="#fff" />
+                  <Text style={styles.viewTicketsButtonText}>View Open Tickets</Text>
+                </TouchableOpacity>
+              </>
             ) : (
               <View style={styles.signInModalBlock}>
                 <Text style={styles.signInModalText}>Sign in to create a ticket.</Text>
@@ -410,6 +494,59 @@ export default function HomeScreen() {
               style={styles.modalCloseButton}
               onPress={() => setSelectedUnit(null)}
             >
+              <Text style={styles.modalCloseButtonText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={contactCardPerson != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setContactCardPerson(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setContactCardPerson(null)}
+        >
+          <TouchableOpacity style={styles.contactCardContent} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.contactCardTitle}>
+              {contactCardPerson ? displayName(contactCardPerson) : ''}
+            </Text>
+            {contactCardPerson?.phone ? (
+              <Text style={styles.contactCardPhone}>{contactCardPerson.phone}</Text>
+            ) : (
+              <Text style={styles.contactCardPhoneMuted}>No phone number</Text>
+            )}
+            <View style={styles.contactCardActions}>
+              <TouchableOpacity
+                style={styles.contactCardButton}
+                onPress={() => {
+                  if (contactCardPerson?.phone?.trim()) {
+                    Linking.openURL(`tel:${contactCardPerson.phone.trim()}`);
+                  }
+                }}
+                disabled={!contactCardPerson?.phone?.trim()}
+              >
+                <Ionicons name="call-outline" size={20} color="#fff" />
+                <Text style={styles.contactCardButtonText}>Call</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.contactCardButton}
+                onPress={() => {
+                  if (contactCardPerson?.phone?.trim()) {
+                    Linking.openURL(`sms:${contactCardPerson.phone.trim()}`);
+                  }
+                }}
+                disabled={!contactCardPerson?.phone?.trim()}
+              >
+                <Ionicons name="chatbubble-outline" size={20} color="#fff" />
+                <Text style={styles.contactCardButtonText}>Text</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={() => setContactCardPerson(null)}>
               <Text style={styles.modalCloseButtonText}>Close</Text>
             </TouchableOpacity>
           </TouchableOpacity>
@@ -592,12 +729,36 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     textAlign: 'center',
   },
-  modalSubtitle: {
-    fontSize: 14,
-    color: '#aaa',
-    fontFamily: 'Inter_400Regular',
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 16,
-    textAlign: 'center',
+    justifyContent: 'center',
+  },
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  statusLabel: {
+    fontSize: 14,
+    color: '#ccc',
+    fontFamily: 'Inter_400Regular',
+  },
+  contactRow: {
+    marginBottom: 10,
+  },
+  contactLabel: {
+    fontSize: 12,
+    color: '#999',
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 2,
+  },
+  contactLink: {
+    fontSize: 16,
+    color: '#f2681c',
+    fontFamily: 'Inter_600SemiBold',
   },
   createTicketButton: {
     flexDirection: 'row',
@@ -615,6 +776,22 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     marginLeft: 8,
   },
+  viewTicketsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#555',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  viewTicketsButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginLeft: 8,
+  },
   modalCloseButton: {
     paddingVertical: 10,
     alignItems: 'center',
@@ -623,5 +800,53 @@ const styles = StyleSheet.create({
     color: '#aaa',
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
+  },
+  contactCardContent: {
+    backgroundColor: '#4a4a4a',
+    borderRadius: 12,
+    padding: 20,
+    width: '85%',
+    maxWidth: 320,
+  },
+  contactCardTitle: {
+    fontSize: 18,
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  contactCardPhone: {
+    fontSize: 15,
+    color: '#ccc',
+    fontFamily: 'Inter_400Regular',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  contactCardPhoneMuted: {
+    fontSize: 15,
+    color: '#888',
+    fontFamily: 'Inter_400Regular',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  contactCardActions: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  contactCardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f2681c',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  contactCardButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
   },
 });

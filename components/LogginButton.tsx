@@ -12,17 +12,14 @@ export const LogginButton = ({onPress, label, backgroundColor = '#f2681c'}: Logg
         Inter_400Regular,
     });
 
-    if (!fontsLoaded) {
-        return null;
-    }
-
+    // Always render the button so it's clickable; use system font until Inter loads
     return (
         <TouchableOpacity 
             style={[styles.button, { backgroundColor }]} 
             onPress={onPress}
             activeOpacity={0.8}
         >
-            <Text style={styles.text}>{label}</Text>
+            <Text style={[styles.text, !fontsLoaded && styles.textFallback]}>{label}</Text>
         </TouchableOpacity>
     )
 }
@@ -52,5 +49,8 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontFamily: 'Inter_400Regular',
         letterSpacing: 0.5,
-    }
+    },
+    textFallback: {
+        fontFamily: undefined,
+    },
 })

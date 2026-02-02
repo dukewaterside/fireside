@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Fireside South Peak",
-    "slug": "fireside-south-peak",
+    "name": "Fireside",
+    "slug": "fireside",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,7 +19,8 @@
       "bundleIdentifier": "com.fireside.southpeak",
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs access to your camera to capture photos of building elements.",
-        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select images for reports."
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select images for reports.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -34,7 +35,9 @@
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -63,7 +66,7 @@
         "origin": false
       },
       "eas": {
-        "projectId": "your-project-id"
+        "projectId": "62be9d28-ec98-4812-a914-b4e1a7a46db6"
       }
     }
   }

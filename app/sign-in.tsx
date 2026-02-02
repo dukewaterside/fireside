@@ -15,18 +15,32 @@ export default function SignInScreen() {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [error, setError] = useState('');
 
+  const SESSION_CHECK_MS = 2000;  // Don't block sign-in screen for more than 2s
+  const SIGN_IN_TIMEOUT_MS = 12000; // Stop "Signing In..." after 12s and show error
+
   useEffect(() => {
     let isMounted = true;
+    const timeoutId = setTimeout(() => {
+      if (isMounted) return; // After 2s, stop waiting; stay on sign-in
+    }, SESSION_CHECK_MS);
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!isMounted || !session) return;
-      const { data: profile } = await supabase.from('profiles').select('status').eq('id', session.user.id).single();
-      const status = profile?.status ?? 'active';
-      if (status === 'pending') router.replace('/pending-approval');
-      else if (status === 'denied') router.replace('/pending-approval?status=denied');
-      else router.replace('/(tabs)');
+      try {
+        const { data: { session } } = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise<{ data: { session: null } }>((r) => setTimeout(() => r({ data: { session: null } }), SESSION_CHECK_MS)),
+        ]);
+        if (!isMounted || !session) return;
+        clearTimeout(timeoutId);
+        const { data: profile } = await supabase.from('profiles').select('status').eq('id', session.user.id).single();
+        const status = profile?.status ?? 'active';
+        if (status === 'pending') router.replace('/pending-approval');
+        else if (status === 'denied') router.replace('/pending-approval?status=denied');
+        else router.replace('/(tabs)');
+      } catch {
+        // Ignore; stay on sign-in
+      }
     })();
-    return () => { isMounted = false; };
+    return () => { isMounted = false; clearTimeout(timeoutId); };
   }, []);
 
   const [fontsLoaded] = useFonts({
@@ -34,7 +48,8 @@ export default function SignInScreen() {
     Inter_600SemiBold,
   });
 
-  if (!fontsLoaded) return null;
+  // Show form even when fonts are loading so screen isn't blank
+  const showForm = true;
 
   const handleSignIn = async () => {
     setError('');
@@ -47,31 +62,44 @@ export default function SignInScreen() {
       return;
     }
     setIsLoading(true);
+    const timeoutPromise = new Promise<never>((_, rej) =>
+      setTimeout(() => rej(new Error('timeout')), SIGN_IN_TIMEOUT_MS)
+    );
     try {
-      const response = await signIn(email.trim().toLowerCase(), password);
-      if (response.success && response.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('status')
-          .eq('id', response.user.id)
-          .single();
-        const profileStatus = profile?.status ?? 'active';
-        if (profileStatus === 'pending') {
-          router.replace('/pending-approval');
-          return;
-        }
-        if (profileStatus === 'denied') {
-          const { signOut } = await import('../lib/services/auth');
-          await signOut();
-          setError('Your account was denied access. Please contact an owner.');
-          return;
-        }
-        router.replace('/(tabs)');
-      } else {
+      const response = await Promise.race([
+        (async () => {
+          const res = await signIn(email.trim().toLowerCase(), password);
+          if (!res.success || !res.user) return res;
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('status')
+            .eq('id', res.user.id)
+            .single();
+          const profileStatus = profile?.status ?? 'active';
+          if (profileStatus === 'pending') {
+            router.replace('/pending-approval');
+            return res;
+          }
+          if (profileStatus === 'denied') {
+            const { signOut } = await import('../lib/services/auth');
+            await signOut();
+            setError('Your account was denied access. Please contact an owner.');
+            return res;
+          }
+          router.replace('/(tabs)');
+          return res;
+        })(),
+        timeoutPromise,
+      ]);
+      if (response && !response.success) {
         setError(response.error || 'Failed to sign in');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      if (err instanceof Error && err.message === 'timeout') {
+        setError('Connection is slow or offline. Check your network and try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -120,7 +148,7 @@ export default function SignInScreen() {
         <TextInput
           autoCapitalize="none"
           secureTextEntry
-          style={styles.input}
+          style={[styles.input, !fontsLoaded && { fontFamily: undefined }]}
           onChangeText={setPassword}
           value={password}
           placeholder="Password"

@@ -1,16 +1,26 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { Tabs, router } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
+import { registerAndSavePushToken } from '../../lib/notifications/push';
+
+const FONT_LOAD_TIMEOUT_MS = 5000; // Show tabs after 5s even if fonts still loading
 
 export default function TabsLayout() {
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimeout(true), FONT_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -36,6 +46,9 @@ export default function TabsLayout() {
           router.replace('/pending-approval?status=denied');
           return;
         }
+        if (mounted && status === 'active') {
+          registerAndSavePushToken().catch(() => {});
+        }
         const { count, error } = await supabase
           .from('notifications')
           .select('*', { count: 'exact', head: true })
@@ -46,8 +59,13 @@ export default function TabsLayout() {
     }, [])
   );
 
-  if (!fontsLoaded) {
-    return null;
+  // Show spinner until fonts load; after timeout show tabs anyway so app never sticks
+  if (!fontsLoaded && !fontTimeout) {
+    return (
+      <View style={styles.loadingRoot}>
+        <ActivityIndicator size="large" color="#f2681c" />
+      </View>
+    );
   }
 
   return (
@@ -117,3 +135,7 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingRoot: { flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' },
+});
