@@ -32,6 +32,8 @@ type TicketDetail = {
   photo_url: string | null;
   photo_urls: string[] | null;
   building_element: string;
+  location_scope: 'interior' | 'exterior' | null;
+  floor_level: '1st_floor' | '2nd_floor' | null;
   priority: string | null;
   notes: string | null;
   status: string | null;
@@ -40,11 +42,35 @@ type TicketDetail = {
   completed_at: string | null;
   created_at: string;
   updated_at: string | null;
-  units: { unit_number: string } | null;
+  units: { unit_number: string } | { unit_number: string }[] | null;
 };
 
 type CreatorProfile = { id: string; first_name: string | null; last_name: string | null; email: string | null };
-type AssignedContact = { user_id: string; first_name: string | null; last_name: string | null; email: string | null };
+type AssignedContact = {
+  key: string;
+  user_id?: string | null;
+  contact_id?: string | null;
+  profile_id?: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  company_name?: string | null;
+  email: string | null;
+};
+
+function formatTicketDateTime(value: string): string {
+  const d = new Date(value);
+  const datePart = d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const timePart = d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${datePart} | ${timePart}`;
+}
 
 export default function TicketDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -56,6 +82,7 @@ export default function TicketDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
   const [zoomPhotoUri, setZoomPhotoUri] = useState<string | null>(null);
+  const [commentCount, setCommentCount] = useState(0);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -75,7 +102,7 @@ export default function TicketDetailScreen() {
     }
     const { data: ticketData, error: fetchErr } = await supabase
       .from('tickets')
-      .select('id, unit_id, created_by, photo_url, photo_urls, building_element, priority, notes, status, completion_notes, completed_by, completed_at, created_at, updated_at, units(unit_number)')
+      .select('id, unit_id, created_by, photo_url, photo_urls, building_element, location_scope, floor_level, priority, notes, status, completion_notes, completed_by, completed_at, created_at, updated_at, units(unit_number)')
       .eq('id', id)
       .single();
 
@@ -86,16 +113,60 @@ export default function TicketDetailScreen() {
       setAssigned([]);
       return;
     }
-    const t = ticketData as TicketDetail;
+    const tRaw = ticketData as TicketDetail;
+    const unitObj = Array.isArray(tRaw.units) ? (tRaw.units[0] ?? null) : tRaw.units;
+    const t = { ...tRaw, units: unitObj };
     setTicket(t);
 
-    const [{ data: creatorData }, { data: assignData }] = await Promise.all([
+    const [{ data: creatorData }, { data: assignData }, { data: contactAssignData }, { count: cCount }] = await Promise.all([
       supabase.from('profiles').select('id, first_name, last_name, email').eq('id', t.created_by).maybeSingle(),
       supabase.from('ticket_assignments').select('user_id, profiles(first_name, last_name, email)').eq('ticket_id', id),
+      supabase
+        .from('ticket_contact_assignments')
+        .select('contact_id, contacts(profile_id, company_name, first_name, last_name, email)')
+        .eq('ticket_id', id),
+      supabase.from('ticket_comments').select('*', { count: 'exact', head: true }).eq('ticket_id', id),
     ]);
     setCreator((creatorData as CreatorProfile) ?? null);
-    const assignList = (assignData ?? []) as { user_id: string; profiles: { first_name: string | null; last_name: string | null; email: string | null } | null }[];
-    setAssigned(assignList.map((a) => ({ user_id: a.user_id, ...(a.profiles ?? { first_name: null, last_name: null, email: null }) })));
+    const assignList = (assignData ?? []) as {
+      user_id: string;
+      profiles: { first_name: string | null; last_name: string | null; email: string | null } | { first_name: string | null; last_name: string | null; email: string | null }[] | null;
+    }[];
+    const assignedFromProfiles: AssignedContact[] = assignList.map((a) => {
+      const profileObj = Array.isArray(a.profiles) ? (a.profiles[0] ?? null) : a.profiles;
+      return {
+        key: `user:${a.user_id}`,
+        user_id: a.user_id,
+        profile_id: a.user_id,
+        ...(profileObj ?? { first_name: null, last_name: null, email: null }),
+      };
+    });
+
+    const assignedProfileIds = new Set(assignedFromProfiles.map((a) => a.profile_id).filter(Boolean));
+    const contactAssignList = (contactAssignData ?? []) as {
+      contact_id: string;
+      contacts:
+        | { profile_id: string | null; company_name: string | null; first_name: string | null; last_name: string | null; email: string | null }
+        | { profile_id: string | null; company_name: string | null; first_name: string | null; last_name: string | null; email: string | null }[]
+        | null;
+    }[];
+    const assignedFromContacts: AssignedContact[] = contactAssignList
+      .map((a) => {
+        const contactObj = Array.isArray(a.contacts) ? (a.contacts[0] ?? null) : a.contacts;
+        return {
+          key: `contact:${a.contact_id}`,
+          contact_id: a.contact_id,
+          profile_id: contactObj?.profile_id ?? null,
+          first_name: contactObj?.first_name ?? null,
+          last_name: contactObj?.last_name ?? null,
+          company_name: contactObj?.company_name ?? null,
+          email: contactObj?.email ?? null,
+        };
+      })
+      .filter((a) => !(a.profile_id && assignedProfileIds.has(a.profile_id)));
+
+    setAssigned([...assignedFromProfiles, ...assignedFromContacts]);
+    setCommentCount(cCount ?? 0);
   }, [id]);
 
   useFocusEffect(
@@ -118,23 +189,31 @@ export default function TicketDetailScreen() {
 
   const handleResolve = useCallback(async () => {
     if (!ticket || ticket.status === 'completed') return;
+    setError(null);
     setResolving(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
+      setError('Sign in again to resolve this ticket.');
       setResolving(false);
       return;
     }
-    const { error: updateErr } = await supabase
+    const { data: updatedRows, error: updateErr } = await supabase
       .from('tickets')
       .update({
         status: 'completed',
         completed_by: user.id,
         completed_at: new Date().toISOString(),
       })
-      .eq('id', ticket.id);
+      .eq('id', ticket.id)
+      .select('id');
 
     if (updateErr) {
       setError(updateErr.message || 'Could not resolve ticket.');
+      setResolving(false);
+      return;
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      setError('You do not have permission to resolve this ticket.');
       setResolving(false);
       return;
     }
@@ -256,6 +335,8 @@ export default function TicketDetailScreen() {
               <Text style={styles.unitName}>
                 {(ticket.units as { unit_number: string } | null)?.unit_number ?? 'Unit'}
               </Text>
+            </View>
+            <View style={styles.statusRow}>
               <View style={[styles.badge, ticket.priority === 'high' && styles.badgeHigh]}>
                 <Text style={styles.badgeText}>
                   {PRIORITY_LABELS[ticket.priority ?? 'medium'] ?? ticket.priority}
@@ -269,62 +350,94 @@ export default function TicketDetailScreen() {
             <Text style={styles.value}>
               {BUILDING_LABELS[ticket.building_element] ?? ticket.building_element}
             </Text>
+            <View style={styles.compactChipsRow}>
+              <View style={styles.compactChip}>
+                <Ionicons name="home-outline" size={14} color="#bbb" />
+                <Text style={styles.compactChipText}>
+                  {ticket.location_scope === 'interior'
+                    ? 'Interior'
+                    : ticket.location_scope === 'exterior'
+                      ? 'Exterior'
+                      : 'Unspecified'}
+                </Text>
+              </View>
+              <View style={styles.compactChip}>
+                <Ionicons name="layers-outline" size={14} color="#bbb" />
+                <Text style={styles.compactChipText}>
+                  {ticket.floor_level === '1st_floor'
+                    ? '1st Floor'
+                    : ticket.floor_level === '2nd_floor'
+                      ? '2nd Floor'
+                      : 'Floor n/a'}
+                </Text>
+              </View>
+            </View>
           </View>
 
-          {creator && (
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Submitted by</Text>
-              <Text style={styles.value}>
-                {[creator.first_name, creator.last_name].filter(Boolean).join(' ') || creator.email || 'Unknown'}
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Ticket details</Text>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailKey}>Submitted by</Text>
+              <Text style={styles.detailVal}>
+                {creator
+                  ? ([creator.first_name, creator.last_name].filter(Boolean).join(' ') || creator.email || 'Unknown')
+                  : 'Unknown'}
               </Text>
-              {creator.email ? (
-                <Text style={styles.valueSecondary}>{creator.email}</Text>
-              ) : null}
             </View>
-          )}
-
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Notes</Text>
-            <Text style={styles.notesValue}>{ticket.notes || 'No notes provided.'}</Text>
-          </View>
-
-          {assigned.length > 0 && (
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Assigned contacts</Text>
-              {assigned.map((a) => (
-                <View key={a.user_id} style={styles.assignedRow}>
-                  <Ionicons name="person-outline" size={18} color="#999" />
-                  <Text style={styles.assignedName}>
-                    {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email || 'Unknown'}
-                  </Text>
-                </View>
-              ))}
+            <View style={styles.detailRow}>
+              <Text style={styles.detailKey}>Created</Text>
+              <Text style={styles.detailVal}>{formatTicketDateTime(ticket.created_at)}</Text>
             </View>
-          )}
-
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Timestamps</Text>
-            <Text style={styles.label}>Created</Text>
-            <Text style={styles.value}>{new Date(ticket.created_at).toLocaleString()}</Text>
             {ticket.updated_at ? (
-              <>
-                <Text style={styles.label}>Last updated</Text>
-                <Text style={styles.value}>{new Date(ticket.updated_at).toLocaleString()}</Text>
-              </>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailKey}>Updated</Text>
+                <Text style={styles.detailVal}>{formatTicketDateTime(ticket.updated_at)}</Text>
+              </View>
             ) : null}
-            {ticket.status === 'completed' && ticket.completed_at && (
+            {ticket.status === 'completed' && ticket.completed_at ? (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailKey}>Resolved</Text>
+                <Text style={styles.detailVal}>{formatTicketDateTime(ticket.completed_at)}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.label}>Notes</Text>
+            <Text style={styles.notesValue}>{ticket.notes || 'No notes provided.'}</Text>
+
+            {assigned.length > 0 && (
               <>
-                <Text style={styles.label}>Resolved</Text>
-                <Text style={styles.value}>{new Date(ticket.completed_at).toLocaleString()}</Text>
-                {ticket.completion_notes ? (
-                  <>
-                    <Text style={styles.label}>Completion notes</Text>
-                    <Text style={styles.value}>{ticket.completion_notes}</Text>
-                  </>
-                ) : null}
+                <Text style={styles.label}>Assigned contacts</Text>
+                <View style={styles.assignedChipsRow}>
+                  {assigned.map((a) => (
+                    <View key={a.key} style={styles.assignedChip}>
+                      <Ionicons name="person-outline" size={14} color="#bbb" />
+                      <Text style={styles.assignedChipText}>
+                        {a.company_name || [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email || 'Unknown'}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </>
             )}
+
+            {ticket.completion_notes ? (
+              <>
+                <Text style={styles.label}>Completion notes</Text>
+                <Text style={styles.value}>{ticket.completion_notes}</Text>
+              </>
+            ) : null}
           </View>
+
+          <TouchableOpacity
+            style={styles.messageBoardButton}
+            onPress={() => router.push({ pathname: '/tickets/[id]/comments', params: { id: ticket.id } })}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" />
+            <Text style={styles.messageBoardButtonText}>Message Board</Text>
+            <View style={styles.messageBoardCountBadge}>
+              <Text style={styles.messageBoardCountText}>{commentCount}</Text>
+            </View>
+          </TouchableOpacity>
 
           {ticket.status === 'open' && (
             <TouchableOpacity
@@ -538,6 +651,33 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 8,
   },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  compactChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  compactChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#555',
+  },
+  compactChipText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#ddd',
+  },
   unitName: {
     fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
@@ -588,6 +728,76 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: '#fff',
     lineHeight: 24,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#5a5a5a',
+  },
+  detailKey: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#999',
+  },
+  detailVal: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#ddd',
+  },
+  assignedChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  assignedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#555',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  assignedChipText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#ddd',
+  },
+  messageBoardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#5a5a5a',
+    borderRadius: 8,
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  messageBoardButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  messageBoardCountBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#f2681c',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  messageBoardCountText: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
   },
   assignedRow: {
     flexDirection: 'row',

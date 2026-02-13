@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Modal,
+  ScrollView,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
@@ -24,25 +27,89 @@ type TicketRow = {
   created_by: string;
   photo_url: string | null;
   building_element: string;
+  location_scope: 'interior' | 'exterior' | null;
+  floor_level: '1st_floor' | '2nd_floor' | null;
   priority: string | null;
   notes: string | null;
   status: string | null;
   created_at: string;
-  units: { unit_number: string } | null;
+  units: { unit_number: string } | { unit_number: string }[] | null;
 };
+
+type UnitOption = { id: string; unit_number: string };
+
+const PRIORITY_OPTIONS: { value: string | null; label: string }[] = [
+  { value: null, label: 'All' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
+const STATUS_OPTIONS: { value: 'open' | 'completed'; label: string }[] = [
+  { value: 'open', label: 'Open' },
+  { value: 'completed', label: 'Completed' },
+];
+
+const LOCATION_OPTIONS: { value: 'interior' | 'exterior' | null; label: string }[] = [
+  { value: null, label: 'All' },
+  { value: 'interior', label: 'Interior' },
+  { value: 'exterior', label: 'Exterior' },
+];
+
+const FLOOR_OPTIONS: { value: '1st_floor' | '2nd_floor' | null; label: string }[] = [
+  { value: null, label: 'All' },
+  { value: '1st_floor', label: '1st Floor' },
+  { value: '2nd_floor', label: '2nd Floor' },
+];
+
+function fuzzyMatch(query: string, text: string): boolean {
+  const q = query.trim().toLowerCase();
+  const t = text.toLowerCase();
+  if (!q) return true;
+  if (t.includes(q)) return true;
+  let qi = 0;
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) qi++;
+  }
+  return qi === q.length;
+}
 
 export default function TicketsScreen() {
   const params = useLocalSearchParams<{ unitId?: string }>();
-  const unitId = params.unitId ?? '';
+  const initialUnitId = params.unitId ?? '';
 
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [filterUnitId, setFilterUnitId] = useState<string | null>(initialUnitId || null);
+  const [filterPriority, setFilterPriority] = useState<string | null>(null);
+  const [filterLocationScope, setFilterLocationScope] = useState<'interior' | 'exterior' | null>(null);
+  const [filterFloorLevel, setFilterFloorLevel] = useState<'1st_floor' | '2nd_floor' | null>(null);
+  const [filterStatus, setFilterStatus] = useState<'open' | 'completed'>('open');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [unitsList, setUnitsList] = useState<UnitOption[]>([]);
+  const [modalUnit, setModalUnit] = useState(false);
+  const [modalSeverity, setModalSeverity] = useState(false);
+  const [modalLocation, setModalLocation] = useState(false);
+  const [modalFloor, setModalFloor] = useState(false);
+  const [modalStatus, setModalStatus] = useState(false);
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
+
+  useEffect(() => {
+    if (initialUnitId) setFilterUnitId(initialUnitId);
+  }, [initialUnitId]);
+
+  const fetchUnits = useCallback(async () => {
+    const { data } = await supabase
+      .from('units')
+      .select('id, unit_number')
+      .order('unit_number');
+    setUnitsList((data as UnitOption[]) ?? []);
+  }, []);
 
   const fetchTickets = useCallback(async () => {
     setFetchError(null);
@@ -54,17 +121,25 @@ export default function TicketsScreen() {
     }
     let query = supabase
       .from('tickets')
-      .select('id, unit_id, created_by, photo_url, building_element, priority, notes, status, created_at, units(unit_number)')
+      .select('id, unit_id, created_by, photo_url, building_element, location_scope, floor_level, priority, notes, status, created_at, units(unit_number)')
+      .eq('status', filterStatus)
       .order('created_at', { ascending: false });
-    if (unitId) query = query.eq('unit_id', unitId);
+    if (filterUnitId) query = query.eq('unit_id', filterUnitId);
+    if (filterPriority) query = query.eq('priority', filterPriority);
+    if (filterLocationScope) query = query.eq('location_scope', filterLocationScope);
+    if (filterFloorLevel) query = query.eq('floor_level', filterFloorLevel);
     let { data, error } = await query;
 
     if (error) {
       let fallback = supabase
         .from('tickets')
-        .select('id, unit_id, created_by, photo_url, building_element, priority, notes, status, created_at')
+        .select('id, unit_id, created_by, photo_url, building_element, location_scope, floor_level, priority, notes, status, created_at')
+        .eq('status', filterStatus)
         .order('created_at', { ascending: false });
-      if (unitId) fallback = fallback.eq('unit_id', unitId);
+      if (filterUnitId) fallback = fallback.eq('unit_id', filterUnitId);
+      if (filterPriority) fallback = fallback.eq('priority', filterPriority);
+      if (filterLocationScope) fallback = fallback.eq('location_scope', filterLocationScope);
+      if (filterFloorLevel) fallback = fallback.eq('floor_level', filterFloorLevel);
       const { data: dataNoJoin, error: errorNoJoin } = await fallback;
       if (!errorNoJoin && dataNoJoin?.length) {
         setTickets((dataNoJoin as TicketRow[]).map((t) => ({ ...t, units: null })));
@@ -74,8 +149,12 @@ export default function TicketsScreen() {
       setTickets([]);
       return;
     }
-    setTickets((data as TicketRow[]) ?? []);
-  }, [unitId]);
+    const rows = ((data as TicketRow[]) ?? []).map((t) => ({
+      ...t,
+      units: Array.isArray(t.units) ? (t.units[0] ?? null) : t.units,
+    }));
+    setTickets(rows);
+  }, [filterUnitId, filterPriority, filterLocationScope, filterFloorLevel, filterStatus]);
 
   useFocusEffect(
     useCallback(() => {
@@ -89,6 +168,15 @@ export default function TicketsScreen() {
     }, [fetchTickets])
   );
 
+  const filterChangedAfterMount = useRef(false);
+  useEffect(() => {
+    if (!filterChangedAfterMount.current) {
+      filterChangedAfterMount.current = true;
+      return;
+    }
+    fetchTickets();
+  }, [filterUnitId, filterPriority, filterLocationScope, filterFloorLevel, filterStatus, fetchTickets]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchTickets();
@@ -96,6 +184,31 @@ export default function TicketsScreen() {
   }, [fetchTickets]);
 
   if (!fontsLoaded) return null;
+
+  const searchTrimmed = searchQuery.trim();
+  const selectedUnitLabel = filterUnitId
+    ? (unitsList.find((u) => u.id === filterUnitId)?.unit_number ?? 'Selected unit')
+    : null;
+  const selectedSeverityLabel = filterPriority ? (PRIORITY_LABELS[filterPriority] ?? filterPriority) : null;
+  const selectedLocationLabel = filterLocationScope
+    ? (filterLocationScope === 'interior' ? 'Interior' : 'Exterior')
+    : null;
+  const selectedFloorLabel = filterFloorLevel
+    ? (filterFloorLevel === '1st_floor' ? '1st Floor' : '2nd Floor')
+    : null;
+  const selectedStatusLabel = filterStatus === 'completed' ? 'Completed' : null;
+
+  const displayedTickets = searchTrimmed
+    ? tickets.filter((item) => {
+        const unitLabelText = (item.units as { unit_number: string } | null)?.unit_number ?? '';
+        const buildingText = BUILDING_LABELS[item.building_element] ?? item.building_element;
+        const locationText = item.location_scope === 'interior' ? 'Interior' : item.location_scope === 'exterior' ? 'Exterior' : '';
+        const floorText = item.floor_level === '1st_floor' ? '1st Floor' : item.floor_level === '2nd_floor' ? '2nd Floor' : '';
+        const notesText = item.notes ?? '';
+        const haystack = [unitLabelText, buildingText, locationText, floorText, notesText].join(' ');
+        return fuzzyMatch(searchTrimmed, haystack);
+      })
+    : tickets;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -106,6 +219,196 @@ export default function TicketsScreen() {
         <Text style={styles.headerTitle}>Tickets</Text>
         <View style={styles.headerRight} />
       </View>
+
+      {!fetchError && (
+        <View style={styles.searchWrap}>
+          <Ionicons name="search-outline" size={18} color="#999" />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search tickets"
+            placeholderTextColor="#888"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+      )}
+
+      {!fetchError && !loading && (
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterChip, selectedUnitLabel && styles.filterChipActive]}
+            onPress={() => {
+              fetchUnits();
+              setModalUnit(true);
+            }}
+          >
+            <Text style={[styles.filterChipText, selectedUnitLabel && styles.filterChipTextActive]} numberOfLines={1}>
+              {selectedUnitLabel ?? 'Unit'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.filterChip, selectedSeverityLabel && styles.filterChipActive]} onPress={() => setModalSeverity(true)}>
+            <Text style={[styles.filterChipText, selectedSeverityLabel && styles.filterChipTextActive]} numberOfLines={1}>
+              {selectedSeverityLabel ?? 'Severity'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.filterChip, selectedLocationLabel && styles.filterChipActive]} onPress={() => setModalLocation(true)}>
+            <Text style={[styles.filterChipText, selectedLocationLabel && styles.filterChipTextActive]} numberOfLines={1}>
+              {selectedLocationLabel ?? 'Location'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.filterChip, selectedFloorLabel && styles.filterChipActive]} onPress={() => setModalFloor(true)}>
+            <Text style={[styles.filterChipText, selectedFloorLabel && styles.filterChipTextActive]} numberOfLines={1}>
+              {selectedFloorLabel ?? 'Floor'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.filterChip, selectedStatusLabel && styles.filterChipActive]} onPress={() => setModalStatus(true)}>
+            <Text style={[styles.filterChipText, selectedStatusLabel && styles.filterChipTextActive]} numberOfLines={1}>
+              {selectedStatusLabel ?? 'Status'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Unit filter modal */}
+      <Modal visible={modalUnit} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setModalUnit(false)}>
+          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Unit</Text>
+            <ScrollView style={styles.pickerScroll}>
+              <TouchableOpacity
+                style={styles.pickerRow}
+                onPress={() => {
+                  setFilterUnitId(null);
+                  setModalUnit(false);
+                }}
+              >
+                <Text style={styles.pickerRowText}>All units</Text>
+              </TouchableOpacity>
+              {unitsList.map((u) => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setFilterUnitId(u.id);
+                    setModalUnit(false);
+                  }}
+                >
+                  <Text style={styles.pickerRowText}>{u.unit_number}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerClose} onPress={() => setModalUnit(false)}>
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Severity filter modal */}
+      <Modal visible={modalSeverity} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setModalSeverity(false)}>
+          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Severity</Text>
+            <ScrollView style={styles.pickerScroll}>
+              {PRIORITY_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.value ?? 'all'}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setFilterPriority(opt.value);
+                    setModalSeverity(false);
+                  }}
+                >
+                  <Text style={styles.pickerRowText}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerClose} onPress={() => setModalSeverity(false)}>
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Status filter modal */}
+      <Modal visible={modalStatus} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setModalStatus(false)}>
+          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Status</Text>
+            <ScrollView style={styles.pickerScroll}>
+              {STATUS_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setFilterStatus(opt.value);
+                    setModalStatus(false);
+                  }}
+                >
+                  <Text style={styles.pickerRowText}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerClose} onPress={() => setModalStatus(false)}>
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Interior/Exterior filter modal */}
+      <Modal visible={modalLocation} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setModalLocation(false)}>
+          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Interior / Exterior</Text>
+            <ScrollView style={styles.pickerScroll}>
+              {LOCATION_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.value ?? 'all'}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setFilterLocationScope(opt.value);
+                    setModalLocation(false);
+                  }}
+                >
+                  <Text style={styles.pickerRowText}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerClose} onPress={() => setModalLocation(false)}>
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Floor filter modal */}
+      <Modal visible={modalFloor} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setModalFloor(false)}>
+          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Floor</Text>
+            <ScrollView style={styles.pickerScroll}>
+              {FLOOR_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.value ?? 'all'}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setFilterFloorLevel(opt.value);
+                    setModalFloor(false);
+                  }}
+                >
+                  <Text style={styles.pickerRowText}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerClose} onPress={() => setModalFloor(false)}>
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {loading ? (
         <View style={styles.centered}>
@@ -126,12 +429,18 @@ export default function TicketsScreen() {
             </TouchableOpacity>
           )}
         </View>
-      ) : tickets.length === 0 ? (
+      ) : displayedTickets.length === 0 ? (
         <View style={styles.centered}>
           <Ionicons name="ticket-outline" size={64} color="#666" />
-          <Text style={styles.emptyTitle}>No tickets yet</Text>
+          <Text style={styles.emptyTitle}>
+            {searchTrimmed ? 'No matching tickets' : filterStatus === 'open' ? 'No open tickets' : 'No completed tickets'}
+          </Text>
           <Text style={styles.emptySubtitle}>
-            Create a ticket from the home screen by selecting a unit and tapping "Create a ticket".
+            {searchTrimmed
+              ? 'Try a different search or clear filters.'
+              : filterStatus === 'open'
+              ? 'Create a ticket from the home screen or change filters.'
+              : 'Completed tickets will appear here.'}
           </Text>
           <TouchableOpacity
             style={styles.backToHomeButton}
@@ -142,7 +451,7 @@ export default function TicketsScreen() {
         </View>
       ) : (
         <FlatList
-          data={tickets}
+          data={displayedTickets}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           refreshControl={
@@ -171,6 +480,11 @@ export default function TicketsScreen() {
                 </Text>
                 <Text style={styles.ticketElement}>
                   {BUILDING_LABELS[item.building_element] ?? item.building_element}
+                </Text>
+                <Text style={styles.ticketSubMeta}>
+                  {(item.location_scope === 'interior' ? 'Interior' : item.location_scope === 'exterior' ? 'Exterior' : '—')}
+                  {' | '}
+                  {(item.floor_level === '1st_floor' ? '1st Floor' : item.floor_level === '2nd_floor' ? '2nd Floor' : '—')}
                 </Text>
                 <View style={styles.ticketMeta}>
                   <View style={[styles.badge, item.priority === 'high' && styles.badgeHigh]}>
@@ -220,6 +534,105 @@ const styles = StyleSheet.create({
   },
   headerRight: {
     width: 40,
+  },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#4a4a4a',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+    paddingVertical: 0,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4a4a4a',
+  },
+  filterChip: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    backgroundColor: '#4a4a4a',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#5a5a5a',
+  },
+  filterChipActive: {
+    borderColor: '#f2681c',
+    backgroundColor: '#554236',
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#ccc',
+  },
+  filterChipTextActive: {
+    color: '#fff',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  pickerModal: {
+    backgroundColor: '#3b3b3b',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '70%',
+    paddingBottom: 24,
+  },
+  pickerTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4a4a4a',
+  },
+  pickerScroll: {
+    maxHeight: 320,
+  },
+  pickerRow: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#4a4a4a',
+  },
+  pickerRowText: {
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+  },
+  pickerClose: {
+    marginTop: 16,
+    marginHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#f2681c',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  pickerCloseText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
   },
   centered: {
     flex: 1,
@@ -292,6 +705,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
     color: '#999',
+    marginTop: 2,
+  },
+  ticketSubMeta: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#777',
     marginTop: 2,
   },
   ticketMeta: {

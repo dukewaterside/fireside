@@ -46,15 +46,35 @@ const PRIORITY_OPTIONS = [
   { label: 'High', value: 'high' },
 ];
 
+const LOCATION_SCOPE_OPTIONS = [
+  { label: 'Interior', value: 'interior' },
+  { label: 'Exterior', value: 'exterior' },
+];
+
+const FLOOR_LEVEL_OPTIONS = [
+  { label: '1st Floor', value: '1st_floor' },
+  { label: '2nd Floor', value: '2nd_floor' },
+];
+
 type BuildingElement = (typeof BUILDING_OPTIONS)[number]['value'];
 type Priority = (typeof PRIORITY_OPTIONS)[number]['value'];
+type LocationScope = (typeof LOCATION_SCOPE_OPTIONS)[number]['value'];
+type FloorLevel = (typeof FLOOR_LEVEL_OPTIONS)[number]['value'];
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isValidUuid(s: string): boolean {
   return UUID_REGEX.test(s);
 }
 
-type NotifyProfile = { id: string; first_name: string | null; last_name: string | null; email: string | null };
+type AssignContact = {
+  id: string;
+  profile_id: string | null;
+  company_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  email: string | null;
+};
 
 export default function CreateTicketScreen() {
   const params = useLocalSearchParams<{ unitId: string; unitName: string; photoUri: string }>();
@@ -64,17 +84,19 @@ export default function CreateTicketScreen() {
 
   const [photos, setPhotos] = useState<string[]>(initialPhotoUri ? [initialPhotoUri] : []);
   const [buildingElement, setBuildingElement] = useState<BuildingElement | ''>('');
+  const [locationScope, setLocationScope] = useState<LocationScope | ''>('');
+  const [floorLevel, setFloorLevel] = useState<FloorLevel | ''>('');
   const [priority, setPriority] = useState<Priority | ''>('medium');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const [notifyModalVisible, setNotifyModalVisible] = useState(false);
-  const [notifyStep, setNotifyStep] = useState<'type' | 'profiles'>('type');
+  const [notifyStep, setNotifyStep] = useState<'type' | 'contacts'>('type');
   const [notifySelectedRole, setNotifySelectedRole] = useState<ProfileRole | null>(null);
-  const [notifyProfiles, setNotifyProfiles] = useState<NotifyProfile[]>([]);
-  const [notifyProfilesLoading, setNotifyProfilesLoading] = useState(false);
-  const [notifySelectedUserIds, setNotifySelectedUserIds] = useState<string[]>([]);
+  const [notifyContacts, setNotifyContacts] = useState<AssignContact[]>([]);
+  const [notifyContactsLoading, setNotifyContactsLoading] = useState(false);
+  const [notifySelectedContactIds, setNotifySelectedContactIds] = useState<string[]>([]);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -120,7 +142,7 @@ export default function CreateTicketScreen() {
   const openNotifyModal = useCallback(() => {
     setNotifyStep('type');
     setNotifySelectedRole(null);
-    setNotifyProfiles([]);
+    setNotifyContacts([]);
     setNotifyModalVisible(true);
   }, []);
 
@@ -128,37 +150,38 @@ export default function CreateTicketScreen() {
     setNotifyModalVisible(false);
     setNotifyStep('type');
     setNotifySelectedRole(null);
-    setNotifyProfiles([]);
+    setNotifyContacts([]);
   }, []);
 
   const onNotifySelectType = useCallback(async (role: ProfileRole) => {
     setNotifySelectedRole(role);
-    setNotifyProfilesLoading(true);
-    setNotifyProfiles([]);
-    setNotifyStep('profiles');
+    setNotifyContactsLoading(true);
+    setNotifyContacts([]);
+    setNotifyStep('contacts');
     const { data, error: fetchErr } = await supabase
-      .from('profiles')
-      .select('id, first_name, last_name, email')
+      .from('contacts')
+      .select('id, profile_id, company_name, first_name, last_name, phone, email')
       .eq('role', role)
       .eq('status', 'active')
+      .is('merged_into_contact_id', null)
       .order('first_name');
-    setNotifyProfilesLoading(false);
+    setNotifyContactsLoading(false);
     if (!fetchErr && data?.length) {
-      setNotifyProfiles(data as NotifyProfile[]);
+      setNotifyContacts(data as AssignContact[]);
     } else {
-      setNotifyProfiles([]);
+      setNotifyContacts([]);
     }
   }, []);
 
   const onNotifyBackToType = useCallback(() => {
     setNotifyStep('type');
     setNotifySelectedRole(null);
-    setNotifyProfiles([]);
+    setNotifyContacts([]);
   }, []);
 
-  const toggleNotifyProfile = useCallback((userId: string) => {
-    setNotifySelectedUserIds((prev) =>
-      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+  const toggleNotifyContact = useCallback((contactId: string) => {
+    setNotifySelectedContactIds((prev) =>
+      prev.includes(contactId) ? prev.filter((id) => id !== contactId) : [...prev, contactId]
     );
   }, []);
 
@@ -166,6 +189,14 @@ export default function CreateTicketScreen() {
     setError('');
     if (!buildingElement) {
       setError('Please select a building element.');
+      return;
+    }
+    if (!locationScope) {
+      setError('Please select Interior or Exterior.');
+      return;
+    }
+    if (!floorLevel) {
+      setError('Please select a floor.');
       return;
     }
     if (!unitId) {
@@ -204,6 +235,8 @@ export default function CreateTicketScreen() {
           photo_url: photoUrls[0],
           photo_urls: photoUrls,
           building_element: buildingElement,
+          location_scope: locationScope,
+          floor_level: floorLevel,
           priority: priority || 'medium',
           notes: notes.trim() || null,
           status: 'open',
@@ -225,10 +258,33 @@ export default function CreateTicketScreen() {
           .eq('id', unitId)
           .single();
         const pmId = (unitRow as { project_manager_id: string | null } | null)?.project_manager_id ?? null;
-        const assignUserIds = [...new Set([pmId, ...notifySelectedUserIds].filter(Boolean))] as string[];
-        if (assignUserIds.length > 0) {
+
+        let pmContactId: string | null = null;
+        if (pmId) {
+          const { data: pmContact } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('profile_id', pmId)
+            .is('merged_into_contact_id', null)
+            .maybeSingle();
+          pmContactId = (pmContact as { id: string } | null)?.id ?? null;
+        }
+
+        const assignContactIds = [...new Set([pmContactId, ...notifySelectedContactIds].filter(Boolean))] as string[];
+        if (assignContactIds.length > 0) {
+          const { error: assignContactError } = await supabase.from('ticket_contact_assignments').insert(
+            assignContactIds.map((cid) => ({ ticket_id: ticketId, contact_id: cid, created_by: user.id }))
+          );
+          if (assignContactError) {
+            setError(assignContactError.message || 'Ticket created but failed to assign contacts.');
+            setLoading(false);
+            return;
+          }
+        }
+
+        if (pmId && !pmContactId) {
           const { error: assignError } = await supabase.from('ticket_assignments').insert(
-            assignUserIds.map((uid) => ({ ticket_id: ticketId, user_id: uid }))
+            [{ ticket_id: ticketId, user_id: pmId }]
           );
           if (assignError) {
             setError(assignError.message || 'Ticket created but failed to assign users.');
@@ -338,6 +394,24 @@ export default function CreateTicketScreen() {
             hasError={!!error && !buildingElement}
           />
 
+          <Text style={styles.fieldLabel}>Interior / Exterior</Text>
+          <CustomPicker<LocationScope>
+            selectedValue={locationScope}
+            onValueChange={setLocationScope}
+            items={LOCATION_SCOPE_OPTIONS}
+            placeholder="Select location"
+            hasError={!!error && !locationScope}
+          />
+
+          <Text style={styles.fieldLabel}>Floor</Text>
+          <CustomPicker<FloorLevel>
+            selectedValue={floorLevel}
+            onValueChange={setFloorLevel}
+            items={FLOOR_LEVEL_OPTIONS}
+            placeholder="Select floor"
+            hasError={!!error && !floorLevel}
+          />
+
           <Text style={styles.fieldLabel}>Priority</Text>
           <CustomPicker<Priority>
             selectedValue={priority}
@@ -358,13 +432,13 @@ export default function CreateTicketScreen() {
             textAlignVertical="top"
           />
 
-          <Text style={styles.fieldLabel}>Assign to user</Text>
+          <Text style={styles.fieldLabel}>Assign contacts</Text>
           <TouchableOpacity style={styles.notifyButton} onPress={openNotifyModal}>
             <Ionicons name="people-outline" size={20} color="#fff" />
             <Text style={styles.notifyButtonText}>
-              {notifySelectedUserIds.length === 0
-                ? 'Assign to users (optional; unit PM is auto-assigned)'
-                : `${notifySelectedUserIds.length} person${notifySelectedUserIds.length === 1 ? '' : 's'} assigned`}
+              {notifySelectedContactIds.length === 0
+                ? 'Assign contacts (optional; unit PM is auto-assigned)'
+                : `${notifySelectedContactIds.length} contact${notifySelectedContactIds.length === 1 ? '' : 's'} assigned`}
             </Text>
             <Ionicons name="chevron-forward" size={20} color="#999" />
           </TouchableOpacity>
@@ -398,14 +472,14 @@ export default function CreateTicketScreen() {
           <View style={styles.notifyModalContent} onStartShouldSetResponder={() => true}>
             <View style={styles.notifyModalHeader}>
               <View style={styles.notifyHeaderLeft}>
-                {notifyStep === 'profiles' && (
+                {notifyStep === 'contacts' && (
                   <TouchableOpacity style={styles.notifyBackButton} onPress={onNotifyBackToType}>
                     <Ionicons name="arrow-back" size={24} color="#fff" />
                   </TouchableOpacity>
                 )}
               </View>
               <Text style={styles.notifyModalTitle}>
-                {notifyStep === 'type' ? 'Assign by role' : 'Select people to assign'}
+                {notifyStep === 'type' ? 'Assign by role' : 'Select contacts to assign'}
               </Text>
               <TouchableOpacity style={styles.notifyHeaderRight} onPress={closeNotifyModal}>
                 <Text style={styles.notifyCloseButtonText}>Done</Text>
@@ -427,30 +501,37 @@ export default function CreateTicketScreen() {
                 )}
               />
             )}
-            {notifyStep === 'profiles' && (
+            {notifyStep === 'contacts' && (
               <>
-                {notifyProfilesLoading ? (
+                {notifyContactsLoading ? (
                   <View style={styles.notifyLoadingWrap}>
                     <ActivityIndicator size="large" color="#f2681c" />
                   </View>
-                ) : notifyProfiles.length === 0 ? (
+                ) : notifyContacts.length === 0 ? (
                   <View style={styles.notifyEmptyWrap}>
-                    <Text style={styles.notifyEmptyText}>No active profiles with this role.</Text>
+                    <Text style={styles.notifyEmptyText}>No active contacts with this role.</Text>
                   </View>
                 ) : (
                   <FlatList
-                    data={notifyProfiles}
+                    data={notifyContacts}
                     keyExtractor={(p) => p.id}
                     contentContainerStyle={styles.notifyListContent}
                     renderItem={({ item }) => {
-                      const selected = notifySelectedUserIds.includes(item.id);
-                      const name = [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || 'Unknown';
+                      const selected = notifySelectedContactIds.includes(item.id);
+                      const name = item.company_name || [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || item.phone || 'Unknown';
+                      const subtitle =
+                        item.company_name && (item.first_name || item.last_name)
+                          ? [item.first_name, item.last_name].filter(Boolean).join(' ')
+                          : item.email || item.phone || '';
                       return (
                         <TouchableOpacity
                           style={[styles.notifyOptionItem, selected && styles.notifyOptionItemSelected]}
-                          onPress={() => toggleNotifyProfile(item.id)}
+                          onPress={() => toggleNotifyContact(item.id)}
                         >
-                          <Text style={styles.notifyOptionText}>{name}</Text>
+                          <View style={styles.notifyOptionTextWrap}>
+                            <Text style={styles.notifyOptionText}>{name}</Text>
+                            {subtitle ? <Text style={styles.notifyOptionSubText}>{subtitle}</Text> : null}
+                          </View>
                           {selected && <Ionicons name="checkmark-circle" size={22} color="#f2681c" />}
                         </TouchableOpacity>
                       );
@@ -715,6 +796,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_400Regular',
     color: '#fff',
+  },
+  notifyOptionTextWrap: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  notifyOptionSubText: {
+    marginTop: 3,
+    fontSize: 13,
+    color: '#999',
+    fontFamily: 'Inter_400Regular',
   },
   notifyLoadingWrap: {
     padding: 40,
