@@ -90,7 +90,7 @@ export default function ResetPasswordScreen() {
     const run = async () => {
       // App opened from link (cold start): getInitialURL has the URL
       const initialUrl = await Linking.getInitialURL();
-      if (await tryRestoreSessionFromUrl(initialUrl)) {
+      if (await tryRestoreSessionFromUrl(initialUrl)) { 
         setCheckingUrl(false);
         return;
       }

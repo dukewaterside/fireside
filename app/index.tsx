@@ -3,16 +3,7 @@ import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase/client';
 
-const SESSION_TIMEOUT_MS = 2500;  // Don't wait more than 2.5s for getSession
-const PROFILE_TIMEOUT_MS = 2000;  // Don't wait more than 2s for profile
-const FALLBACK_TIMEOUT_MS = 3000; // If anything hangs, show sign-in after 3s
-
-function raceTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-  ]);
-}
+const FALLBACK_TIMEOUT_MS = 8000; // Prevent getting stuck on splash if network stalls.
 
 export default function Index() {
   const [checking, setChecking] = useState(true);
@@ -28,10 +19,7 @@ export default function Index() {
 
     (async () => {
       try {
-        const { data: { session } } = await raceTimeout(
-          SESSION_TIMEOUT_MS,
-          supabase.auth.getSession()
-        );
+        const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
         setChecking(false);
         clearTimeout(fallback);
@@ -39,11 +27,11 @@ export default function Index() {
           router.replace('/sign-in');
           return;
         }
-        const profileResult = await raceTimeout(
-          PROFILE_TIMEOUT_MS,
-          Promise.resolve(supabase.from('profiles').select('status').eq('id', session.user.id).single())
-        );
-        const profile = profileResult?.data;
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('status')
+          .eq('id', session.user.id)
+          .maybeSingle();
         if (!isMounted) return;
         const status = profile?.status ?? 'active';
         if (status === 'pending') {

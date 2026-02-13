@@ -15,24 +15,17 @@ export default function SignInScreen() {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [error, setError] = useState('');
 
-  const SESSION_CHECK_MS = 2000;  // Don't block sign-in screen for more than 2s
-  const SIGN_IN_TIMEOUT_MS = 12000; // Stop "Signing In..." after 12s and show error
+  const PROFILE_STATUS_RETRY_COUNT = 6;
+  const PROFILE_STATUS_RETRY_DELAY_MS = 500;
+  const SIGN_IN_RETRY_DELAY_MS = 1200;
 
   useEffect(() => {
     let isMounted = true;
-    const timeoutId = setTimeout(() => {
-      if (isMounted) return; // After 2s, stop waiting; stay on sign-in
-    }, SESSION_CHECK_MS);
     (async () => {
       try {
-        const { data: { session } } = await Promise.race([
-          supabase.auth.getSession(),
-          new Promise<{ data: { session: null } }>((r) => setTimeout(() => r({ data: { session: null } }), SESSION_CHECK_MS)),
-        ]);
+        const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted || !session) return;
-        clearTimeout(timeoutId);
-        const { data: profile } = await supabase.from('profiles').select('status').eq('id', session.user.id).single();
-        const status = profile?.status ?? 'active';
+        const status = await fetchProfileStatusWithRetry(session.user.id);
         if (status === 'pending') router.replace('/pending-approval');
         else if (status === 'denied') router.replace('/pending-approval?status=denied');
         else router.replace('/(tabs)');
@@ -40,7 +33,7 @@ export default function SignInScreen() {
         // Ignore; stay on sign-in
       }
     })();
-    return () => { isMounted = false; clearTimeout(timeoutId); };
+    return () => { isMounted = false; };
   }, []);
 
   const [fontsLoaded] = useFonts({
@@ -48,8 +41,19 @@ export default function SignInScreen() {
     Inter_600SemiBold,
   });
 
-  // Show form even when fonts are loading so screen isn't blank
-  const showForm = true;
+  const fetchProfileStatusWithRetry = async (userId: string): Promise<'pending' | 'active' | 'denied'> => {
+    for (let attempt = 0; attempt < PROFILE_STATUS_RETRY_COUNT; attempt++) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('status')
+        .eq('id', userId)
+        .maybeSingle();
+      const status = (data as { status?: 'pending' | 'active' | 'denied' } | null)?.status;
+      if (status) return status;
+      await new Promise((resolve) => setTimeout(resolve, PROFILE_STATUS_RETRY_DELAY_MS));
+    }
+    return 'active';
+  };
 
   const handleSignIn = async () => {
     setError('');
@@ -62,44 +66,44 @@ export default function SignInScreen() {
       return;
     }
     setIsLoading(true);
-    const timeoutPromise = new Promise<never>((_, rej) =>
-      setTimeout(() => rej(new Error('timeout')), SIGN_IN_TIMEOUT_MS)
-    );
     try {
-      const response = await Promise.race([
-        (async () => {
-          const res = await signIn(email.trim().toLowerCase(), password);
-          if (!res.success || !res.user) return res;
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('status')
-            .eq('id', res.user.id)
-            .single();
-          const profileStatus = profile?.status ?? 'active';
-          if (profileStatus === 'pending') {
-            router.replace('/pending-approval');
-            return res;
-          }
-          if (profileStatus === 'denied') {
-            const { signOut } = await import('../lib/services/auth');
-            await signOut();
-            setError('Your account was denied access. Please contact an owner.');
-            return res;
-          }
-          router.replace('/(tabs)');
-          return res;
-        })(),
-        timeoutPromise,
-      ]);
+      const emailNormalized = email.trim().toLowerCase();
+      let response = await signIn(emailNormalized, password);
+      if (!response.success) {
+        const message = (response.error ?? '').toLowerCase();
+        const shouldRetry =
+          message.includes('network') ||
+          message.includes('fetch') ||
+          message.includes('timeout') ||
+          message.includes('timed out');
+        if (shouldRetry) {
+          await new Promise((resolve) => setTimeout(resolve, SIGN_IN_RETRY_DELAY_MS));
+          response = await signIn(emailNormalized, password);
+        }
+      }
       if (response && !response.success) {
         setError(response.error || 'Failed to sign in');
+        return;
       }
+      if (!response?.user) {
+        setError('Could not finish sign-in. Please try again.');
+        return;
+      }
+
+      const profileStatus = await fetchProfileStatusWithRetry(response.user.id);
+      if (profileStatus === 'pending') {
+        router.replace('/pending-approval');
+        return;
+      }
+      if (profileStatus === 'denied') {
+        const { signOut } = await import('../lib/services/auth');
+        await signOut();
+        setError('Your account was denied access. Please contact an owner.');
+        return;
+      }
+      router.replace('/(tabs)');
     } catch (err) {
-      if (err instanceof Error && err.message === 'timeout') {
-        setError('Connection is slow or offline. Check your network and try again.');
-      } else {
-        setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-      }
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }
