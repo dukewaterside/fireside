@@ -164,6 +164,16 @@ describe('resetPasswordForEmail', () => {
     expect(result.error).toBeUndefined();
   });
 
+  it('passes redirectTo to Supabase when provided', async () => {
+    mockResetPasswordForEmail.mockResolvedValueOnce({ error: null });
+
+    await resetPasswordForEmail('u@example.com', { redirectTo: 'fireside://reset-password' });
+
+    expect(mockResetPasswordForEmail).toHaveBeenCalledWith('u@example.com', {
+      redirectTo: 'fireside://reset-password',
+    });
+  });
+
   it('returns failure and error message when Supabase returns an error', async () => {
     mockResetPasswordForEmail.mockResolvedValueOnce({
       error: { message: 'User already reset password' },
@@ -173,6 +183,41 @@ describe('resetPasswordForEmail', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('User already reset password');
+  });
+
+  it('rewrites rate limit (429) error to user-friendly message', async () => {
+    mockResetPasswordForEmail.mockResolvedValueOnce({
+      error: { message: '429 Too Many Requests' },
+    });
+
+    const result = await resetPasswordForEmail('user@example.com');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Too many reset attempts');
+    expect(result.error).toContain('15');
+  });
+
+  it('rewrites "rate limit" error to user-friendly message', async () => {
+    mockResetPasswordForEmail.mockResolvedValueOnce({
+      error: { message: 'Rate limit exceeded for this endpoint' },
+    });
+
+    const result = await resetPasswordForEmail('user@example.com');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Too many reset attempts');
+  });
+
+  it('rewrites email not authorized error to user-friendly message', async () => {
+    mockResetPasswordForEmail.mockResolvedValueOnce({
+      error: { message: 'Email not authorized for this project' },
+    });
+
+    const result = await resetPasswordForEmail('user@example.com');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not allowed');
+    expect(result.error).toContain('password reset');
   });
 });
 

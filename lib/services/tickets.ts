@@ -21,7 +21,7 @@ async function prepareImageForUpload(uri: string): Promise<{ uri: string; conten
   const result = await ImageManipulator.manipulateAsync(
     uri,
     [{ resize: { width: MAX_WIDTH } }],
-    { compress: COMPRESS_QUALITY, format: 'jpeg' }
+    { compress: COMPRESS_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
   );
   return { uri: result.uri, contentType: 'image/jpeg' };
 }

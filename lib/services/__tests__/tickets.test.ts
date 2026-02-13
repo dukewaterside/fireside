@@ -41,6 +41,7 @@ jest.mock('expo-file-system/legacy', () => ({
 
 jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: (..._args: unknown[]) => mockManipulateAsync(),
+  SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
 
 beforeEach(() => {

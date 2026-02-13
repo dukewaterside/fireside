@@ -42,7 +42,14 @@ This project is designed for learning. Follow the `LEARNING_PLAN.md` guide which
 
 ## Testing
 
-For step-by-step instructions on setting up and running unit tests (without example test code), see **[TESTING.md](./TESTING.md)**. Run tests with `npm test`.
+Run unit tests with `npm test` (or `npm run test:watch` for watch mode). After `npm install`, Jest runs all tests under `**/__tests__/**/*.test.ts`.
+
+**What’s covered:**
+
+- **Auth** (`lib/services/__tests__/auth.test.ts`): signIn, signOut, signUp, resetPasswordForEmail (including rate limit and email-not-authorized message rewriting), getCurrentUser, getSession.
+- **Tickets** (`lib/services/__tests__/tickets.test.ts`): uploadTicketPhoto, getSignedTicketPhotoUrl (success, null/empty, signing failure, non-bucket URL).
+- **Unit sort** (`lib/utils/__tests__/unitSort.test.ts`): unitSortKey and compareUnitNumbers so “Downhill 6-7” and similar unit labels sort correctly in the All Units list.
+- **Constants** (`lib/constants/__tests__/tickets.test.ts`): TRADE_LABELS, BUILDING_LABELS, PRIORITY_LABELS, PROFILE_ROLES, ROLE_TYPE_OPTIONS.
 
 ## Resources
 
