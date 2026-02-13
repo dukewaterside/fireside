@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,15 @@ const NOTIFICATION_TITLES: Record<string, string> = {
 
 // related_id (user_approval) -> profile status so we can show "User Approved" after approval
 type RelatedStatusMap = Record<string, string>;
+type RelatedUserMap = Record<string, string>;
+
+type NotificationFilter = 'all' | 'tickets' | 'approvals';
+
+function filterNotifications(list: NotificationRow[], filter: NotificationFilter): NotificationRow[] {
+  if (filter === 'all') return list;
+  if (filter === 'tickets') return list.filter((n) => n.type === 'new_ticket' || n.type === 'ticket_assigned');
+  return list.filter((n) => n.type === 'user_approval');
+}
 
 export default function NotificationsScreen() {
   const [list, setList] = useState<NotificationRow[]>([]);
@@ -42,6 +51,9 @@ export default function NotificationsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [relatedStatus, setRelatedStatus] = useState<RelatedStatusMap>({});
+  const [relatedUserName, setRelatedUserName] = useState<RelatedUserMap>({});
+  const [filter, setFilter] = useState<NotificationFilter>('all');
+  const [userRole, setUserRole] = useState<string | null>(null);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -54,9 +66,18 @@ export default function NotificationsScreen() {
     if (!session) {
       setList([]);
       setRelatedStatus({});
+      setRelatedUserName({});
+      setUserRole(null);
       setError('Sign in to see notifications.');
       return;
     }
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', session.user.id)
+      .maybeSingle();
+    setUserRole((profileData as { role: string } | null)?.role ?? null);
+
     const { data, error: e } = await supabase
       .from('notifications')
       .select('id, recipient_id, type, related_id, read_at, created_at')
@@ -75,13 +96,21 @@ export default function NotificationsScreen() {
     if (approvalIds.length > 0) {
       const { data: profiles } = await supabase
         .from('profiles')
-        .select('id, status')
+        .select('id, status, first_name, last_name, email')
         .in('id', approvalIds);
       const statusMap: RelatedStatusMap = {};
-      (profiles ?? []).forEach((p: { id: string; status: string | null }) => {
+      const nameMap: RelatedUserMap = {};
+      (profiles ?? []).forEach((p: { id: string; status: string | null; first_name?: string | null; last_name?: string | null; email?: string | null }) => {
         statusMap[p.id] = p.status ?? 'pending';
+        const first = p.first_name?.trim() ?? '';
+        const last = p.last_name?.trim() ?? '';
+        nameMap[p.id] = [first, last].filter(Boolean).join(' ') || p.email?.trim() || 'Unknown user';
       });
       setRelatedStatus((prev) => ({ ...prev, ...statusMap }));
+      setRelatedUserName((prev) => ({ ...prev, ...nameMap }));
+    } else {
+      setRelatedStatus({});
+      setRelatedUserName({});
     }
   }, []);
 
@@ -157,12 +186,41 @@ export default function NotificationsScreen() {
     [markAsRead]
   );
 
+  useEffect(() => {
+    if (userRole !== 'owner' && filter === 'approvals') {
+      setFilter('all');
+    }
+  }, [userRole]);
+
   if (!fontsLoaded) return null;
+
+  const filteredList = filterNotifications(list, filter);
+  const showApprovalsFilter = userRole === 'owner';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Notifications</Text>
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterButton, filter === 'tickets' && styles.filterButtonActive]}
+            onPress={() => setFilter((f) => (f === 'tickets' ? 'all' : 'tickets'))}
+          >
+            <Text style={[styles.filterButtonText, filter === 'tickets' && styles.filterButtonTextActive]}>
+              Tickets
+            </Text>
+          </TouchableOpacity>
+          {showApprovalsFilter && (
+            <TouchableOpacity
+              style={[styles.filterButton, filter === 'approvals' && styles.filterButtonActive]}
+              onPress={() => setFilter((f) => (f === 'approvals' ? 'all' : 'approvals'))}
+            >
+              <Text style={[styles.filterButtonText, filter === 'approvals' && styles.filterButtonTextActive]}>
+                Approvals
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {loading ? (
@@ -189,9 +247,17 @@ export default function NotificationsScreen() {
           <Text style={styles.emptyTitle}>No notifications</Text>
           <Text style={styles.emptySubtitle}>You're all caught up.</Text>
         </View>
+      ) : filteredList.length === 0 ? (
+        <View style={styles.centered}>
+          <Ionicons name="filter-outline" size={64} color="#666" />
+          <Text style={styles.emptyTitle}>
+            {filter === 'tickets' ? 'No ticket notifications' : 'No approval notifications'}
+          </Text>
+          <Text style={styles.emptySubtitle}>Try another filter.</Text>
+        </View>
       ) : (
         <FlatList
-          data={list}
+          data={filteredList}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           refreshControl={
@@ -200,73 +266,75 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => {
             const isUnread = !item.read_at;
             const rowContent = (
-              <TouchableOpacity
-                style={[styles.row, isUnread && styles.rowUnread]}
-                onPress={() => openNotification(item)}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.rowDot, isUnread && styles.rowDotUnread]} />
-                <View style={styles.rowBody}>
-                  <Text style={styles.rowTitle}>{NOTIFICATION_TITLES[item.type] ?? item.type}</Text>
-                  <Text style={styles.rowDate}>
-                    {new Date(item.created_at).toLocaleDateString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </Text>
-                  {item.type === 'user_approval' && (
-                    relatedStatus[item.related_id] === 'active' ? (
-                      <View style={styles.approvedBadge}>
-                        <Ionicons name="checkmark-circle" size={20} color="#6a6" />
-                        <Text style={styles.approvedBadgeText}>User approved</Text>
+              <View style={[styles.row, isUnread && styles.rowUnread]}>
+                <TouchableOpacity
+                  style={styles.rowTouchable}
+                  onPress={() => openNotification(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.rowDot, isUnread && styles.rowDotUnread]} />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowTitle}>{NOTIFICATION_TITLES[item.type] ?? item.type}</Text>
+                    {item.type === 'user_approval' && (
+                      <Text style={styles.rowSubTitle}>
+                        User: {relatedUserName[item.related_id] ?? 'Loading...'}
+                      </Text>
+                    )}
+                    <Text style={styles.rowDate}>
+                      {new Date(item.created_at).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                    {item.type === 'user_approval' && (
+                      relatedStatus[item.related_id] === 'active' ? (
+                        <View style={styles.approvedBadge}>
+                          <Ionicons name="checkmark-circle" size={20} color="#6a6" />
+                          <Text style={styles.approvedBadgeText}>User approved</Text>
+                        </View>
+                      ) : (
+                        <TouchableOpacity
+                          style={[styles.approveButton, approvingId === item.related_id && styles.approveButtonDisabled]}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            handleApproveUser(item.related_id, item.id);
+                          }}
+                          disabled={!!approvingId}
+                        >
+                          {approvingId === item.related_id ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                              <Text style={styles.approveButtonText}>Approve user</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )
+                    )}
+                    {(item.type === 'new_ticket' || item.type === 'ticket_assigned') && (
+                      <View style={styles.viewTicketButton}>
+                        <Text style={styles.viewTicketButtonText}>View ticket</Text>
+                        <Ionicons name="chevron-forward" size={18} color="#f2681c" />
                       </View>
-                    ) : (
-                      <TouchableOpacity
-                        style={[styles.approveButton, approvingId === item.related_id && styles.approveButtonDisabled]}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          handleApproveUser(item.related_id, item.id);
-                        }}
-                        disabled={!!approvingId}
-                      >
-                        {approvingId === item.related_id ? (
-                          <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                          <>
-                            <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                            <Text style={styles.approveButtonText}>Approve user</Text>
-                          </>
-                        )}
-                      </TouchableOpacity>
-                    )
-                  )}
-                  {(item.type === 'new_ticket' || item.type === 'ticket_assigned') && (
+                    )}
+                  </View>
+                  {isUnread && (
                     <TouchableOpacity
-                      style={styles.viewTicketButton}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        router.push({ pathname: '/tickets/[id]', params: { id: item.related_id } });
-                      }}
-                    >
-                      <Text style={styles.viewTicketButtonText}>View ticket</Text>
-                      <Ionicons name="chevron-forward" size={18} color="#f2681c" />
-                    </TouchableOpacity>
-                  )}
-                  {!item.read_at && (
-                    <TouchableOpacity
-                      style={styles.markReadButton}
+                      style={styles.markReadIconButton}
                       onPress={(e) => {
                         e.stopPropagation();
                         markAsRead(item.id);
                       }}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                     >
-                      <Text style={styles.markReadButtonText}>Mark as read</Text>
+                      <Ionicons name="checkmark-done-outline" size={22} color="#999" />
                     </TouchableOpacity>
                   )}
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+              </View>
             );
             return <View key={item.id}>{rowContent}</View>;
           }}
@@ -290,6 +358,28 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  filterButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#4a4a4a',
+  },
+  filterButtonActive: {
+    backgroundColor: '#f2681c',
+  },
+  filterButtonText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#999',
+  },
+  filterButtonTextActive: {
     color: '#fff',
   },
   centered: {
@@ -328,17 +418,21 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   row: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
     backgroundColor: '#4a4a4a',
     borderRadius: 8,
-    padding: 14,
     marginBottom: 10,
+    overflow: 'hidden',
   },
   rowUnread: {
     backgroundColor: '#4f4a45',
     borderLeftWidth: 3,
     borderLeftColor: '#f2681c',
+  },
+  rowTouchable: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 14,
+    minHeight: 56,
   },
   rowDot: {
     width: 8,
@@ -363,6 +457,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
     color: '#999',
+    marginTop: 4,
+  },
+  rowSubTitle: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#bbb',
     marginTop: 4,
   },
   approveButton: {
@@ -409,13 +509,10 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     color: '#f2681c',
   },
-  markReadButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  markReadButtonText: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
+  markReadIconButton: {
+    padding: 8,
+    marginLeft: 4,
+    justifyContent: 'center',
+    alignSelf: 'center',
   },
 });

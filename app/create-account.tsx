@@ -23,6 +23,7 @@ import { CustomMultiPicker } from '../components/CustomMultiPicker';
 // Import our auth service and types
 import { signUp, UserRole, Trade, SignUpData } from '../lib/services/auth';
 import { supabase } from '../lib/supabase/client';
+import { TRADE_LABELS } from '../lib/constants/tickets';
 
 export default function CreateAccount() {
   // State variables to store form input values
@@ -36,14 +37,14 @@ export default function CreateAccount() {
   const [confirmPassword, setConfirmPassword] = useState('');
   
   // State for the role dropdown
-  // We use 'Subcontractor' | 'Project Manager' | 'Owner' | 'Internal Developer' | '' as the type
+  // We use 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer' | '' as the type
   // The empty string represents "no selection yet"
   const [role, setRole] = useState<UserRole | ''>('');
   
   // State for the trade dropdown (only shown for subcontractors)
   const [trade, setTrade] = useState<Trade | ''>('');
 
-  // State for assigned units (PM / Internal Developer)
+  // State for assigned units (PM / Designer)
   const [units, setUnits] = useState<{ id: string; unit_number: string }[]>([]);
   const [unitsLoading, setUnitsLoading] = useState(false);
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
@@ -54,7 +55,7 @@ export default function CreateAccount() {
   // State to store any error messages to display to the user
   const [error, setError] = useState('');
 
-  const isPMOrID = role === 'Project Manager' || role === 'Internal Developer';
+  const isPMOrID = role === 'Project Manager' || role === 'Designer';
 
   const fetchUnits = useCallback(async () => {
     setUnitsLoading(true);
@@ -151,7 +152,7 @@ export default function CreateAccount() {
       return false;
     }
 
-    // If role is Project Manager or Internal Developer, at least one unit is required
+    // If role is Project Manager or Designer, at least one unit is required
     if (isPMOrID && selectedUnitIds.length === 0) {
       setError('Please select at least one assigned unit');
       return false;
@@ -188,13 +189,16 @@ export default function CreateAccount() {
       };
 
       const response = await signUp(signUpData);
+      const accountCreatedMessage = response.needsEmailVerification
+        ? 'Your account was created. Please check your email and verify your address before signing in.'
+        : 'Your account has been created successfully. You can now sign in.';
 
       if (response.success && response.user?.id) {
         const userId = response.user.id;
 
         if (isPMOrID && selectedUnitIds.length > 0) {
           const assignmentType =
-            role === 'Project Manager' ? 'project_manager' : 'internal_developer';
+            role === 'Project Manager' ? 'project_manager' : 'designer';
           const rows = selectedUnitIds.map((unit_id) => ({
             user_id: userId,
             unit_id,
@@ -220,21 +224,21 @@ export default function CreateAccount() {
           } else {
             Alert.alert(
               'Account Created!',
-              'Your account has been created successfully. You can now sign in.',
+              accountCreatedMessage,
               [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
             );
           }
         } else {
           Alert.alert(
             'Account Created!',
-            'Your account has been created successfully. You can now sign in.',
+            accountCreatedMessage,
             [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
           );
         }
       } else if (response.success) {
         Alert.alert(
           'Account Created!',
-          'Your account has been created successfully. You can now sign in.',
+          accountCreatedMessage,
           [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
         );
       } else {
@@ -341,7 +345,7 @@ export default function CreateAccount() {
             onValueChange={(itemValue) => {
               setRole(itemValue);
               if (itemValue !== 'Subcontractor') setTrade('');
-              if (itemValue !== 'Project Manager' && itemValue !== 'Internal Developer') {
+              if (itemValue !== 'Project Manager' && itemValue !== 'Designer') {
                 setSelectedUnitIds([]);
               }
             }}
@@ -350,7 +354,7 @@ export default function CreateAccount() {
               { label: 'Subcontractor', value: 'Subcontractor' },
               { label: 'Project Manager', value: 'Project Manager' },
               { label: 'Owner', value: 'Owner' },
-              { label: 'Internal Developer', value: 'Internal Developer' },
+              { label: 'Designer', value: 'Designer' },
             ]}
             hasError={error.includes('role')} // Show error styling if role validation failed
           />
@@ -362,20 +366,13 @@ export default function CreateAccount() {
               selectedValue={trade}
               onValueChange={setTrade}
               placeholder="Select Trade"
-              items={[
-                { label: 'Framing', value: 'Framing' },
-                { label: 'Electrical', value: 'Electrical' },
-                { label: 'Plumbing', value: 'Plumbing' },
-                { label: 'HVAC', value: 'HVAC' },
-                { label: 'Countertops', value: 'Countertops' },
-                { label: 'Flooring', value: 'Flooring' },
-              ]}
+              items={Object.entries(TRADE_LABELS).map(([value, label]) => ({ label, value: value as Trade }))}
               hasError={error.includes('trade')}
             />
           )}
 
-          {/* Assigned units dropdown - only for Project Manager / Internal Developer */}
-          {(role === 'Project Manager' || role === 'Internal Developer') && (
+          {/* Assigned units dropdown - only for Project Manager / Designer */}
+          {(role === 'Project Manager' || role === 'Designer') && (
             <>
               {unitsLoading ? (
                 <View style={styles.unitLoading}>

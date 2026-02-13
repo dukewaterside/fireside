@@ -1,6 +1,7 @@
 // Import the Supabase client we created
 // We use this to make authentication requests to Supabase
 import { supabase } from '../supabase/client';
+import { TRADE_LABELS } from '../constants/tickets';
 
 // Define TypeScript types for better code safety and autocomplete
 // This tells TypeScript what shape our data should have
@@ -8,13 +9,14 @@ export interface AuthResponse {
   success: boolean;        // Did the operation succeed?
   error?: string;          // Error message if something went wrong (optional)
   user?: any;             // The user object if successful (optional)
+  needsEmailVerification?: boolean; // True when Supabase requires email confirmation before full sign-in
 }
 
 // Define the possible user roles in the system
-export type UserRole = 'Subcontractor' | 'Project Manager' | 'Owner' | 'Internal Developer';
+export type UserRole = 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer';
 
 // Define the possible trades (only for subcontractors)
-export type Trade = 'Framing' | 'Electrical' | 'Plumbing' | 'HVAC' | 'Countertops' | 'Flooring';
+export type Trade = keyof typeof TRADE_LABELS;
 
 // Define the structure of user data we'll collect during signup
 export interface SignUpData {
@@ -25,7 +27,7 @@ export interface SignUpData {
   password: string;        // User's password
   role: UserRole;         // User's role in the system
   trade?: Trade;          // User's trade (only if they're a subcontractor, optional)
-  assignedUnitIds?: string[]; // Unit UUIDs (only if Project Manager or Internal Developer)
+  assignedUnitIds?: string[]; // Unit UUIDs (only if Project Manager or Designer)
 }
 
 /**
@@ -80,7 +82,7 @@ function mapRoleToDatabase(role: UserRole): string {
     'Subcontractor': 'subcontractor',
     'Project Manager': 'project_manager',
     'Owner': 'owner',
-    'Internal Developer': 'internal_developer',
+    'Designer': 'designer',
   };
   return roleMap[role];
 }
@@ -90,7 +92,7 @@ function mapRoleToDatabase(role: UserRole): string {
  * The form uses capitalized names like "Framing" but the database uses lowercase like "framing"
  */
 function mapTradeToDatabase(trade: Trade): string {
-  return trade.toLowerCase();
+  return trade;
 }
 
 /**
@@ -138,6 +140,7 @@ export async function signUp(signUpData: SignUpData): Promise<AuthResponse> {
     return {
       success: true,
       user: authData.user,
+      needsEmailVerification: !authData.session,
     };
   } catch (err) {
     return {
@@ -229,7 +232,7 @@ export async function resetPasswordForEmail(
 
     if (error) {
       let message = error.message;
-      if (error.message?.includes('rate limit') || error.message?.includes('429')) {
+      if (error.message?.toLowerCase().includes('rate limit') || error.message?.includes('429')) {
         message =
           'Too many reset attempts. Please wait 15–30 minutes and try again.';
       }
