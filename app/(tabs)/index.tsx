@@ -18,9 +18,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { navigateToSignIn } from '../../lib/navigation';
 import { useFocusEffect } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase/client';
 import { compareUnitNumbers } from '../../lib/utils/unitSort';
+import { formatPhoneNumberDisplay } from '../../lib/utils/phone';
+import {
+  completeHomeDemo,
+  getHomeDemoProgress,
+  isHomeDemoPending,
+  markHomeDemoStep,
+} from '../../lib/onboarding';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -182,6 +188,15 @@ export default function HomeScreen() {
   const [unitsListModalVisible, setUnitsListModalVisible] = useState(false);
   const [contactCardPerson, setContactCardPerson] = useState<ProfileSnippet | null>(null);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showHomeDemo, setShowHomeDemo] = useState(false);
+  const [demoInfoType, setDemoInfoType] = useState<'units' | 'tickets' | 'notifications' | null>(null);
+  const [homeDemoProgress, setHomeDemoProgress] = useState({
+    units: false,
+    tickets: false,
+    notifications: false,
+  });
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
@@ -192,11 +207,69 @@ export default function HomeScreen() {
       let mounted = true;
       (async () => {
         const { data: { session } } = await supabase.auth.getSession();
-        if (mounted) setHasSession(!!session);
+        if (!mounted) return;
+        setHasSession(!!session);
+        setCurrentUserId(session?.user?.id ?? null);
+        if (!session) {
+          setUnreadCount(0);
+          setShowHomeDemo(false);
+          setHomeDemoProgress({ units: false, tickets: false, notifications: false });
+          return;
+        }
+        const pending = await isHomeDemoPending(session.user.id);
+        if (pending) {
+          const progress = await getHomeDemoProgress(session.user.id);
+          if (mounted) {
+            setHomeDemoProgress(progress);
+            setShowHomeDemo(true);
+          }
+        } else if (mounted) {
+          setShowHomeDemo(false);
+          setHomeDemoProgress({ units: true, tickets: true, notifications: true });
+        }
+        const { count, error } = await supabase
+          .from('notifications')
+          .select('*', { count: 'exact', head: true })
+          .is('read_at', null);
+        if (mounted && !error) setUnreadCount(count ?? 0);
       })();
       return () => { mounted = false; };
     }, [])
   );
+
+  const dismissHomeDemo = useCallback(async () => {
+    if (!currentUserId) return;
+    setShowHomeDemo(false);
+    setHomeDemoProgress({ units: true, tickets: true, notifications: true });
+    await completeHomeDemo(currentUserId);
+  }, [currentUserId]);
+
+  const completeDemoStep = useCallback(async (step: 'units' | 'tickets' | 'notifications') => {
+    if (!currentUserId || !showHomeDemo) return;
+    const next = await markHomeDemoStep(currentUserId, step);
+    const done = next.units && next.tickets && next.notifications;
+    setHomeDemoProgress(next);
+    setShowHomeDemo(!done);
+  }, [currentUserId, showHomeDemo]);
+
+  const closeDemoInfoModal = useCallback(() => setDemoInfoType(null), []);
+
+  const continueDemoInfoModal = useCallback(async () => {
+    const type = demoInfoType;
+    setDemoInfoType(null);
+    if (!type) return;
+    if (type === 'units') {
+      await completeDemoStep('units');
+      setUnitsListModalVisible(true);
+      return;
+    }
+    if (type === 'notifications') {
+      await completeDemoStep('notifications');
+      router.push('/(tabs)/notifications');
+      return;
+    }
+    router.push('/tickets?demo=1');
+  }, [demoInfoType, completeDemoStep]);
 
   useEffect(() => {
     const resolved = Image.resolveAssetSource(MAP_SOURCE);
@@ -405,12 +478,33 @@ export default function HomeScreen() {
           style={styles.flameIcon}
           resizeMode="contain"
         />
-        <TouchableOpacity
-          style={styles.notificationIcon}
-          onPress={() => router.push('/(tabs)/notifications')}
-        >
-          <Ionicons name="notifications-outline" size={24} color="#fff" />
-        </TouchableOpacity>
+        <View style={styles.headerRightActions}>
+          <TouchableOpacity
+            style={[styles.notificationIcon, showHomeDemo && !homeDemoProgress.notifications && styles.demoHighlight]}
+            onPress={async () => {
+              if (showHomeDemo && !homeDemoProgress.notifications) {
+                setDemoInfoType('notifications');
+                return;
+              }
+              router.push('/(tabs)/notifications');
+            }}
+          >
+            <Ionicons name="notifications-outline" size={24} color="#fff" />
+            {unreadCount > 0 ? (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.profileIcon}
+            onPress={() => router.push('/(tabs)/profile')}
+          >
+            <Ionicons name="person-outline" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -420,6 +514,15 @@ export default function HomeScreen() {
       >
         <Text style={styles.title}>Select a Unit</Text>
         <Text style={styles.pinchHint}>Pinch to zoom • Tap a unit on the map</Text>
+        {showHomeDemo ? (
+          <View style={styles.mapTipCard}>
+            <Text style={styles.mapTipTitle}>Map tip</Text>
+            <Text style={styles.mapTipText}>Tap a unit on the map, then tap Create Ticket.</Text>
+            <TouchableOpacity style={styles.mapTipSkipButton} onPress={dismissHomeDemo}>
+              <Text style={styles.mapTipSkipText}>Skip demo</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {hasSession === false && (
           <View style={styles.signInBanner}>
             <Text style={styles.signInBannerText}>Sign in to select units and create tickets.</Text>
@@ -468,15 +571,27 @@ export default function HomeScreen() {
 
         <View style={styles.actionButtons}>
           <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => setUnitsListModalVisible(true)}
+            style={[styles.actionButton, showHomeDemo && !homeDemoProgress.units && styles.demoHighlight]}
+            onPress={async () => {
+              if (showHomeDemo && !homeDemoProgress.units) {
+                setDemoInfoType('units');
+                return;
+              }
+              setUnitsListModalVisible(true);
+            }}
           >
             <Ionicons name="business-outline" size={22} color="#fff" />
             <Text style={styles.actionButtonText}>Units</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.actionButton, styles.actionButtonSecond]}
-            onPress={() => router.push('/tickets')}
+            style={[styles.actionButton, styles.actionButtonSecond, showHomeDemo && !homeDemoProgress.tickets && styles.demoHighlight]}
+            onPress={async () => {
+              if (showHomeDemo && !homeDemoProgress.tickets) {
+                setDemoInfoType('tickets');
+                return;
+              }
+              router.push(showHomeDemo ? '/tickets?demo=1' : '/tickets');
+            }}
           >
             <Ionicons name="ticket-outline" size={22} color="#fff" />
             <Text style={styles.actionButtonText}>Tickets</Text>
@@ -519,6 +634,29 @@ export default function HomeScreen() {
               onPress={() => setUnitsListModalVisible(false)}
             >
               <Text style={styles.modalCloseButtonText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={demoInfoType != null} transparent animationType="fade" onRequestClose={closeDemoInfoModal}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={closeDemoInfoModal}>
+          <TouchableOpacity style={styles.demoInfoModal} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.demoInfoTitle}>
+              {demoInfoType === 'units' ? 'Units' : demoInfoType === 'tickets' ? 'Tickets' : 'Notifications'}
+            </Text>
+            <Text style={styles.demoInfoText}>
+              {demoInfoType === 'units'
+                ? 'Here you can open any unit and create a ticket for it. Try tapping a unit now.'
+                : demoInfoType === 'tickets'
+                  ? 'This is where all tickets live. Open the Demo Ticket and walk through Tagged + Message Board.'
+                  : 'This shows your alerts and takes you straight to what changed.'}
+            </Text>
+            <TouchableOpacity style={styles.demoInfoPrimaryButton} onPress={continueDemoInfoModal}>
+              <Text style={styles.demoInfoPrimaryText}>Try it</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.demoInfoSecondaryButton} onPress={closeDemoInfoModal}>
+              <Text style={styles.demoInfoSecondaryText}>Not now</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -584,7 +722,7 @@ export default function HomeScreen() {
               <>
                 <TouchableOpacity
                   style={styles.createTicketButton}
-                  onPress={async () => {
+                  onPress={() => {
                     const unitForTicket = selectedUnit;
                     const isRealUnitId = unitForTicket && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unitForTicket.id);
                     if (!isRealUnitId) {
@@ -595,27 +733,14 @@ export default function HomeScreen() {
                       );
                       return;
                     }
-                    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                    if (status !== 'granted') {
-                      Alert.alert(
-                        'Camera access',
-                        'Camera permission is needed to attach a photo to the ticket.',
-                        [{ text: 'OK' }]
-                      );
-                      return;
-                    }
-                    const result = await ImagePicker.launchCameraAsync({
-                      mediaTypes: ['images'],
-                      allowsEditing: false,
-                    });
                     setSelectedUnit(null);
-                    if (!result.canceled && result.assets[0] && unitForTicket) {
+                    if (unitForTicket) {
                       router.push({
                         pathname: '/tickets/create',
                         params: {
                           unitId: unitForTicket.id,
                           unitName: unitForTicket.unit_number,
-                          photoUri: result.assets[0].uri,
+                          demoCreate: showHomeDemo ? '1' : undefined,
                         },
                       });
                     }
@@ -671,7 +796,7 @@ export default function HomeScreen() {
               {contactCardPerson ? displayName(contactCardPerson) : ''}
             </Text>
             {contactCardPerson?.phone ? (
-              <Text style={styles.contactCardPhone}>{contactCardPerson.phone}</Text>
+              <Text style={styles.contactCardPhone}>{formatPhoneNumberDisplay(contactCardPerson.phone)}</Text>
             ) : (
               <Text style={styles.contactCardPhoneMuted}>No phone number</Text>
             )}
@@ -680,7 +805,7 @@ export default function HomeScreen() {
                 style={styles.contactCardButton}
                 onPress={() => {
                   if (contactCardPerson?.phone?.trim()) {
-                    Linking.openURL(`tel:${contactCardPerson.phone.trim()}`);
+                    Linking.openURL(`tel:${normalizePhoneForDial(contactCardPerson.phone)}`);
                   }
                 }}
                 disabled={!contactCardPerson?.phone?.trim()}
@@ -692,7 +817,7 @@ export default function HomeScreen() {
                 style={styles.contactCardButton}
                 onPress={() => {
                   if (contactCardPerson?.phone?.trim()) {
-                    Linking.openURL(`sms:${contactCardPerson.phone.trim()}`);
+                    Linking.openURL(`sms:${normalizePhoneForDial(contactCardPerson.phone)}`);
                   }
                 }}
                 disabled={!contactCardPerson?.phone?.trim()}
@@ -732,6 +857,119 @@ const styles = StyleSheet.create({
     height: 40,
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 1,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: '#f2681c',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  notificationBadgeText: {
+    fontSize: 10,
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  profileIcon: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  mapTipCard: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    backgroundColor: '#4a4a4a',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#f2681c',
+    padding: 12,
+  },
+  mapTipTitle: {
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+  },
+  mapTipText: {
+    color: '#d1d5db',
+    marginTop: 4,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+  },
+  mapTipSkipButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: '#555',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  mapTipSkipText: {
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+  },
+  demoInfoModal: {
+    width: '88%',
+    backgroundColor: '#3b3b3b',
+    borderWidth: 1,
+    borderColor: '#4a4a4a',
+    borderRadius: 14,
+    padding: 16,
+  },
+  demoInfoTitle: {
+    fontSize: 20,
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  demoInfoText: {
+    marginTop: 8,
+    color: '#d1d5db',
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'Inter_400Regular',
+  },
+  demoInfoPrimaryButton: {
+    marginTop: 14,
+    backgroundColor: '#f2681c',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  demoInfoPrimaryText: {
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+  },
+  demoInfoSecondaryButton: {
+    marginTop: 8,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#555',
+  },
+  demoInfoSecondaryText: {
+    color: '#fff',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+  },
+  demoHighlight: {
+    borderWidth: 1.5,
+    borderColor: '#f2681c',
+    shadowColor: '#f2681c',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
   },
   scrollView: {
     flex: 1,

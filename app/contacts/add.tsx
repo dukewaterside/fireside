@@ -17,11 +17,13 @@ import { supabase } from '../../lib/supabase/client';
 import { navigateToSignIn } from '../../lib/navigation';
 import { TRADE_LABELS } from '../../lib/constants/tickets';
 import { CustomPicker } from '../../components/CustomPicker';
+import { formatPhoneNumberInput, normalizePhoneDigits } from '../../lib/utils/phone';
 
 const ROLE_OPTIONS = [
   { label: 'Owner', value: 'owner' },
   { label: 'Project Manager', value: 'project_manager' },
   { label: 'Designer', value: 'designer' },
+  { label: 'Developer', value: 'developer' },
   { label: 'Subcontractor', value: 'subcontractor' },
 ] as const;
 
@@ -46,8 +48,6 @@ export default function AddContactScreen() {
   });
 
   if (!fontsLoaded) return null;
-
-  const normalizePhone = (value: string): string => value.replace(/[^0-9]/g, '').trim();
 
   const validate = (): boolean => {
     setError('');
@@ -99,14 +99,14 @@ export default function AddContactScreen() {
         return;
       }
 
-      const normalizedPhone = normalizePhone(phone);
+      const normalizedPhone = normalizePhoneDigits(phone);
       const normalizedEmail = email.trim() ? email.trim().toLowerCase() : null;
 
       const { error: insertError } = await supabase.from('contacts').insert({
         company_name: companyName.trim() || null,
         first_name: firstName.trim(),
         last_name: lastName.trim(),
-        phone: phone.trim(),
+        phone: phone.trim() || null,
         phone_normalized: normalizedPhone || null,
         email: normalizedEmail,
         email_normalized: normalizedEmail,
@@ -150,7 +150,11 @@ export default function AddContactScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         {error ? (
           <View style={styles.errorBanner}>
             <Text style={styles.errorText}>{error}</Text>
@@ -186,7 +190,7 @@ export default function AddContactScreen() {
           placeholder="Phone"
           placeholderTextColor="#999"
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={(value) => setPhone(formatPhoneNumberInput(value))}
           keyboardType="phone-pad"
         />
         <TextInput

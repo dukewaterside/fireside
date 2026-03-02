@@ -20,6 +20,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
 import { signOut } from '../../lib/services/auth';
 import { ROLE_TYPE_OPTIONS } from '../../lib/constants/tickets';
+import {
+  formatPhoneNumberDisplay,
+  formatPhoneNumberInput,
+} from '../../lib/utils/phone';
 
 type ProfileData = {
   id: string;
@@ -110,7 +114,7 @@ export default function ProfileScreen() {
     if (p) {
       setEditFirstName(p.first_name ?? '');
       setEditLastName(p.last_name ?? '');
-      setEditPhone(p.phone ?? '');
+      setEditPhone(formatPhoneNumberDisplay(p.phone));
     }
   }, []);
 
@@ -227,7 +231,7 @@ export default function ProfileScreen() {
       .update({
         first_name: editFirstName.trim() || null,
         last_name: editLastName.trim() || null,
-        phone: editPhone.trim() || null,
+        phone: formatPhoneNumberInput(editPhone).trim() || null,
       })
       .eq('id', profile.id);
 
@@ -318,6 +322,7 @@ export default function ProfileScreen() {
           }
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
         >
           {error ? (
             <View style={styles.errorBanner}>
@@ -350,7 +355,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.row}>
                 <Text style={styles.label}>Phone</Text>
-                <Text style={styles.value}>{profile.phone || '—'}</Text>
+                <Text style={styles.value}>{formatPhoneNumberDisplay(profile.phone) || '—'}</Text>
               </View>
               <View style={styles.row}>
                 <Text style={styles.label}>Role</Text>
@@ -398,7 +403,7 @@ export default function ProfileScreen() {
               <TextInput
                 style={styles.input}
                 value={editPhone}
-                onChangeText={setEditPhone}
+                onChangeText={(value) => setEditPhone(formatPhoneNumberInput(value))}
                 placeholder="Phone"
                 placeholderTextColor="#888"
                 keyboardType="phone-pad"
@@ -412,7 +417,7 @@ export default function ProfileScreen() {
                     setSaveError(null);
                     setEditFirstName(profile.first_name ?? '');
                     setEditLastName(profile.last_name ?? '');
-                    setEditPhone(profile.phone ?? '');
+                    setEditPhone(formatPhoneNumberDisplay(profile.phone));
                   }}
                   disabled={saving}
                 >

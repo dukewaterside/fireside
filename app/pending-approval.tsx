@@ -54,6 +54,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
+
   title: {
     fontSize: 22,
     fontFamily: 'Inter_600SemiBold',

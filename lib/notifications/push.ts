@@ -28,11 +28,16 @@ Notifications.setNotificationHandler({
  * Saves token to profiles.expo_push_token so the backend can send pushes.
  */
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
-
   const { status: existing } = await Notifications.getPermissionsAsync();
   let final = existing;
   if (existing !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
+    const { status } = await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
     final = status;
   }
   if (final !== 'granted') return null;
@@ -44,7 +49,9 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     });
   }
 
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
+  const projectId =
+    (Constants.easConfig?.projectId as string | undefined) ??
+    (Constants.expoConfig?.extra?.eas?.projectId as string | undefined);
   const tokenResult = await Notifications.getExpoPushTokenAsync({
     projectId: projectId ?? undefined,
   });
@@ -69,8 +76,17 @@ export async function savePushTokenToProfile(token: string): Promise<boolean> {
  * Register for push and save token. Call once when user is signed in (e.g. on tabs focus).
  */
 export async function registerAndSavePushToken(): Promise<void> {
-  const token = await registerForPushNotificationsAsync();
-  if (token) await savePushTokenToProfile(token);
+  try {
+    let token = await registerForPushNotificationsAsync();
+    if (!token) {
+      // Occasional cold-start race on iOS; a short retry improves reliability.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      token = await registerForPushNotificationsAsync();
+    }
+    if (token) await savePushTokenToProfile(token);
+  } catch {
+    // Swallow registration errors; app should continue even if push setup fails.
+  }
 }
 
 /** Notification payload we attach when sending (type, related_id for deep link) */

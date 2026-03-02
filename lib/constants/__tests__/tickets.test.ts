@@ -73,13 +73,14 @@ describe('PROFILE_ROLES', () => {
     expect(PROFILE_ROLES).toContain('project_manager');
     expect(PROFILE_ROLES).toContain('subcontractor');
     expect(PROFILE_ROLES).toContain('designer');
-    expect(PROFILE_ROLES).toHaveLength(4);
+    expect(PROFILE_ROLES).toContain('developer');
+    expect(PROFILE_ROLES).toHaveLength(5);
   });
 });
 
 describe('ROLE_TYPE_OPTIONS', () => {
   it('has one option per profile role with label and value', () => {
-    expect(ROLE_TYPE_OPTIONS).toHaveLength(4);
+    expect(ROLE_TYPE_OPTIONS).toHaveLength(5);
     const values = ROLE_TYPE_OPTIONS.map((o) => o.value);
     expect(values).toEqual([...PROFILE_ROLES]);
     for (const opt of ROLE_TYPE_OPTIONS) {
@@ -99,5 +100,11 @@ describe('ROLE_TYPE_OPTIONS', () => {
     const designer = ROLE_TYPE_OPTIONS.find((o) => o.value === 'designer');
     expect(designer).toBeDefined();
     expect(designer!.label).toBe('Designer');
+  });
+
+  it('Developer maps to developer', () => {
+    const developer = ROLE_TYPE_OPTIONS.find((o) => o.value === 'developer');
+    expect(developer).toBeDefined();
+    expect(developer!.label).toBe('Developer');
   });
 });

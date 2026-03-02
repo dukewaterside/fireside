@@ -24,6 +24,7 @@ import { CustomPicker } from '../../components/CustomPicker';
 import { supabase } from '../../lib/supabase/client';
 import { uploadTicketPhoto } from '../../lib/services/tickets';
 import { ROLE_TYPE_OPTIONS, type ProfileRole } from '../../lib/constants/tickets';
+import { formatPhoneNumberDisplay } from '../../lib/utils/phone';
 
 const BUILDING_OPTIONS = [
   { label: 'Framing', value: 'framing' },
@@ -52,8 +53,10 @@ const LOCATION_SCOPE_OPTIONS = [
 ];
 
 const FLOOR_LEVEL_OPTIONS = [
+  { label: 'Basement', value: 'basement' },
   { label: '1st Floor', value: '1st_floor' },
   { label: '2nd Floor', value: '2nd_floor' },
+  { label: '3rd Floor', value: '3rd_floor' },
 ];
 
 type BuildingElement = (typeof BUILDING_OPTIONS)[number]['value'];
@@ -77,13 +80,14 @@ type AssignContact = {
 };
 
 export default function CreateTicketScreen() {
-  const params = useLocalSearchParams<{ unitId: string; unitName: string; photoUri: string }>();
+  const params = useLocalSearchParams<{ unitId: string; unitName: string; demoCreate?: string }>();
   const unitId = params.unitId ?? '';
   const unitName = params.unitName ?? 'Unit';
-  const initialPhotoUri = params.photoUri ?? '';
+  const [createGuideVisible, setCreateGuideVisible] = useState(params.demoCreate === '1');
 
-  const [photos, setPhotos] = useState<string[]>(initialPhotoUri ? [initialPhotoUri] : []);
-  const [buildingElement, setBuildingElement] = useState<BuildingElement | ''>('');
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [buildingElements, setBuildingElements] = useState<BuildingElement[]>([]);
+  const [buildingElementModalVisible, setBuildingElementModalVisible] = useState(false);
   const [locationScope, setLocationScope] = useState<LocationScope | ''>('');
   const [floorLevel, setFloorLevel] = useState<FloorLevel | ''>('');
   const [priority, setPriority] = useState<Priority | ''>('medium');
@@ -185,10 +189,16 @@ export default function CreateTicketScreen() {
     );
   }, []);
 
+  const toggleBuildingElement = useCallback((value: BuildingElement) => {
+    setBuildingElements((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    );
+  }, []);
+
   const handleSubmit = async () => {
     setError('');
-    if (!buildingElement) {
-      setError('Please select a building element.');
+    if (buildingElements.length === 0) {
+      setError('Please select at least one building element.');
       return;
     }
     if (!locationScope) {
@@ -207,11 +217,6 @@ export default function CreateTicketScreen() {
       setError('Invalid unit. Please go back to Home, wait for the unit list to load, then select a unit and create a ticket again.');
       return;
     }
-    if (photos.length === 0) {
-      setError('Add at least one photo (retake or add from library).');
-      return;
-    }
-
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -232,9 +237,10 @@ export default function CreateTicketScreen() {
         .insert({
           unit_id: unitId,
           created_by: user.id,
-          photo_url: photoUrls[0],
+          photo_url: photoUrls[0] ?? null,
           photo_urls: photoUrls,
-          building_element: buildingElement,
+          building_element: buildingElements[0],
+          building_elements: buildingElements,
           location_scope: locationScope,
           floor_level: floorLevel,
           priority: priority || 'medium',
@@ -315,7 +321,7 @@ export default function CreateTicketScreen() {
           <View style={styles.headerRight} />
         </View>
         <View style={styles.centered}>
-          <Text style={styles.errorText}>Missing unit or photo. Go back and create a ticket from a unit.</Text>
+          <Text style={styles.errorText}>Missing unit. Go back and create a ticket from a unit.</Text>
           <TouchableOpacity style={styles.backToTicketsButton} onPress={() => router.replace('/tickets')}>
             <Text style={styles.backToTicketsButtonText}>Back to Tickets</Text>
           </TouchableOpacity>
@@ -343,6 +349,7 @@ export default function CreateTicketScreen() {
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.unitLabel}>{unitName}</Text>
@@ -377,7 +384,7 @@ export default function CreateTicketScreen() {
           <View style={styles.photoActions}>
             <TouchableOpacity style={styles.photoActionButton} onPress={handleRetakePhoto}>
               <Ionicons name="camera-outline" size={20} color="#fff" />
-              <Text style={styles.photoActionButtonText}>Retake</Text>
+              <Text style={styles.photoActionButtonText}>Take photo</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.photoActionButton} onPress={handleAddFromLibrary}>
               <Ionicons name="images-outline" size={20} color="#fff" />
@@ -385,14 +392,30 @@ export default function CreateTicketScreen() {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.fieldLabel}>Building element</Text>
-          <CustomPicker<BuildingElement>
-            selectedValue={buildingElement}
-            onValueChange={setBuildingElement}
-            items={BUILDING_OPTIONS}
-            placeholder="Select element"
-            hasError={!!error && !buildingElement}
-          />
+          <Text style={styles.fieldLabel}>Building elements</Text>
+          <TouchableOpacity
+            style={[styles.notifyButton, !!error && buildingElements.length === 0 && styles.notifyButtonError]}
+            onPress={() => setBuildingElementModalVisible(true)}
+          >
+            <Ionicons name="construct-outline" size={20} color="#fff" />
+            <Text style={styles.notifyButtonText}>
+              {buildingElements.length === 0
+                ? 'Select building elements'
+                : `${buildingElements.length} element${buildingElements.length === 1 ? '' : 's'} selected`}
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+          {buildingElements.length > 0 ? (
+            <View style={styles.selectedElementsWrap}>
+              {buildingElements.map((v) => (
+                <View key={v} style={styles.selectedElementChip}>
+                  <Text style={styles.selectedElementChipText}>
+                    {BUILDING_OPTIONS.find((o) => o.value === v)?.label ?? v}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           <Text style={styles.fieldLabel}>Interior / Exterior</Text>
           <CustomPicker<LocationScope>
@@ -437,7 +460,7 @@ export default function CreateTicketScreen() {
             <Ionicons name="people-outline" size={20} color="#fff" />
             <Text style={styles.notifyButtonText}>
               {notifySelectedContactIds.length === 0
-                ? 'Assign contacts (optional; unit PM is auto-assigned)'
+                ? 'Assign contacts'
                 : `${notifySelectedContactIds.length} contact${notifySelectedContactIds.length === 1 ? '' : 's'} assigned`}
             </Text>
             <Ionicons name="chevron-forward" size={20} color="#999" />
@@ -461,6 +484,63 @@ export default function CreateTicketScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={createGuideVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCreateGuideVisible(false)}
+      >
+        <Pressable style={styles.notifyModalBackdrop} onPress={() => setCreateGuideVisible(false)}>
+          <View style={styles.demoCreateModal} onStartShouldSetResponder={() => true}>
+            <Text style={styles.demoCreateTitle}>Creating a ticket</Text>
+            <Text style={styles.demoCreateText}>1) Photo is optional. You can add one or skip it.</Text>
+            <Text style={styles.demoCreateText}>2) Add details so people know what needs work.</Text>
+            <Text style={styles.demoCreateText}>
+              3) Assign contacts. Assigned people are notified and can view/comment on the ticket.
+            </Text>
+            <TouchableOpacity style={styles.demoCreateButton} onPress={() => setCreateGuideVisible(false)}>
+              <Text style={styles.demoCreateButtonText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={buildingElementModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setBuildingElementModalVisible(false)}
+      >
+        <Pressable style={styles.notifyModalBackdrop} onPress={() => setBuildingElementModalVisible(false)}>
+          <View style={styles.notifyModalContent} onStartShouldSetResponder={() => true}>
+            <View style={styles.notifyModalHeader}>
+              <View style={styles.notifyHeaderLeft} />
+              <Text style={styles.notifyModalTitle}>Select building elements</Text>
+              <TouchableOpacity style={styles.notifyHeaderRight} onPress={() => setBuildingElementModalVisible(false)}>
+                <Text style={styles.notifyCloseButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={BUILDING_OPTIONS}
+              keyExtractor={(item) => item.value}
+              contentContainerStyle={styles.notifyListContent}
+              renderItem={({ item }) => {
+                const selected = buildingElements.includes(item.value);
+                return (
+                  <TouchableOpacity
+                    style={[styles.notifyOptionItem, selected && styles.notifyOptionItemSelected]}
+                    onPress={() => toggleBuildingElement(item.value)}
+                  >
+                    <Text style={styles.notifyOptionText}>{item.label}</Text>
+                    {selected && <Ionicons name="checkmark-circle" size={22} color="#f2681c" />}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={notifyModalVisible}
@@ -518,11 +598,12 @@ export default function CreateTicketScreen() {
                     contentContainerStyle={styles.notifyListContent}
                     renderItem={({ item }) => {
                       const selected = notifySelectedContactIds.includes(item.id);
-                      const name = item.company_name || [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || item.phone || 'Unknown';
+                      const formattedPhone = item.phone ? formatPhoneNumberDisplay(item.phone) : '';
+                      const name = item.company_name || [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || formattedPhone || 'Unknown';
                       const subtitle =
                         item.company_name && (item.first_name || item.last_name)
                           ? [item.first_name, item.last_name].filter(Boolean).join(' ')
-                          : item.email || item.phone || '';
+                          : item.email || formattedPhone || '';
                       return (
                         <TouchableOpacity
                           style={[styles.notifyOptionItem, selected && styles.notifyOptionItemSelected]}
@@ -718,11 +799,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 16,
   },
+  notifyButtonError: {
+    borderWidth: 1,
+    borderColor: '#f2681c',
+  },
   notifyButtonText: {
     flex: 1,
     fontSize: 16,
     fontFamily: 'Inter_400Regular',
     color: '#fff',
+  },
+  selectedElementsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: -8,
+    marginBottom: 12,
+  },
+  selectedElementChip: {
+    backgroundColor: '#5a5a5a',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  selectedElementChipText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
   },
   notifyModalBackdrop: {
     flex: 1,
@@ -819,5 +922,37 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_400Regular',
     color: '#999',
+  },
+  demoCreateModal: {
+    width: '88%',
+    backgroundColor: '#3b3b3b',
+    borderWidth: 1,
+    borderColor: '#4a4a4a',
+    borderRadius: 14,
+    padding: 16,
+  },
+  demoCreateTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  demoCreateText: {
+    marginTop: 8,
+    color: '#d1d5db',
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'Inter_400Regular',
+  },
+  demoCreateButton: {
+    marginTop: 14,
+    backgroundColor: '#f2681c',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  demoCreateButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
   },
 });

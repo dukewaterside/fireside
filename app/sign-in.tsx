@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Image, View, Text, StyleSheet, TextInput, TouchableOpacity, Alert } from 'react-native';
+import { Image, View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as Linking from 'expo-linking';
@@ -7,6 +7,8 @@ import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-font
 import { LogginButton } from '../components/LogginButton';
 import { signIn, resetPasswordForEmail } from '../lib/services/auth';
 import { supabase } from '../lib/supabase/client';
+import { hasCompletedOnboarding } from '../lib/onboarding';
+import { registerAndSavePushToken } from '../lib/notifications/push';
 
 export default function SignInScreen() {
   const [email, setEmail] = useState('');
@@ -101,7 +103,9 @@ export default function SignInScreen() {
         setError('Your account was denied access. Please contact an owner.');
         return;
       }
-      router.replace('/(tabs)');
+      registerAndSavePushToken().catch(() => {});
+      const completed = await hasCompletedOnboarding(response.user.id);
+      router.replace(completed ? '/(tabs)' : '/onboarding');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
@@ -138,63 +142,78 @@ export default function SignInScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.container}>
-        <Image source={require('../assets/fireside.png')} style={styles.localImage} />
-        <View style={{ height: 40 }} />
-        <TextInput
-          autoCapitalize="none"
-          style={styles.input}
-          onChangeText={setEmail}
-          value={email}
-          placeholder="Email"
-          placeholderTextColor="#999"
-        />
-        <TextInput
-          autoCapitalize="none"
-          secureTextEntry
-          style={[styles.input, !fontsLoaded && { fontFamily: undefined }]}
-          onChangeText={setPassword}
-          value={password}
-          placeholder="Password"
-          placeholderTextColor="#999"
-        />
-        {error ? (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-        <TouchableOpacity
-          style={styles.forgotPassword}
-          onPress={handleForgotPassword}
-          disabled={isResettingPassword}
-        >
-          <Text style={styles.forgotPasswordText}>
-            {isResettingPassword ? 'Sending…' : 'Forgot Password?'}
-          </Text>
-        </TouchableOpacity>
-        <LogginButton
-          label={isLoading ? 'Signing In...' : 'Sign In'}
-          onPress={handleSignIn}
-          backgroundColor={isLoading ? '#999' : '#f2681c'}
-        />
-        <LogginButton
-          label="Create New Account"
-          onPress={() => router.push('/create-account')}
-        />
-      </View>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.inner}>
+          <Image source={require('../assets/fireside.png')} style={styles.localImage} />
+          <View style={{ height: 40 }} />
+          <TextInput
+            autoCapitalize="none"
+            style={styles.input}
+            onChangeText={setEmail}
+            value={email}
+            placeholder="Email"
+            placeholderTextColor="#999"
+          />
+          <TextInput
+            autoCapitalize="none"
+            secureTextEntry
+            style={[styles.input, !fontsLoaded && { fontFamily: undefined }]}
+            onChangeText={setPassword}
+            value={password}
+            placeholder="Password"
+            placeholderTextColor="#999"
+          />
+          {error ? (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+          <TouchableOpacity
+            style={styles.forgotPassword}
+            onPress={handleForgotPassword}
+            disabled={isResettingPassword}
+          >
+            <Text style={styles.forgotPasswordText}>
+              {isResettingPassword ? 'Sending…' : 'Forgot Password?'}
+            </Text>
+          </TouchableOpacity>
+          <LogginButton
+            label={isLoading ? 'Signing In...' : 'Sign In'}
+            onPress={handleSignIn}
+            backgroundColor={isLoading ? '#999' : '#f2681c'}
+          />
+          <LogginButton
+            label="Create New Account"
+            onPress={() => router.push('/create-account')}
+          />
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#3b3b3b' },
-  localImage: { resizeMode: 'center' },
+  localImage: {
+    width: 280,
+    height: 64,
+    resizeMode: 'contain',
+  },
   container: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#3b3b3b',
     padding: 20,
+  },
+  inner: {
+    width: '100%',
+    alignItems: 'center',
   },
   input: {
     width: '100%',

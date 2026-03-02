@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase/client';
+import { hasCompletedOnboarding } from '../lib/onboarding';
 
-const FALLBACK_TIMEOUT_MS = 8000; // Prevent getting stuck on splash if network stalls.
+const FALLBACK_TIMEOUT_MS = 12000; // Prevent getting stuck on splash if any auth/profile call stalls.
 
 export default function Index() {
   const [checking, setChecking] = useState(true);
@@ -21,9 +22,9 @@ export default function Index() {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
-        setChecking(false);
-        clearTimeout(fallback);
         if (!session) {
+          setChecking(false);
+          clearTimeout(fallback);
           router.replace('/sign-in');
           return;
         }
@@ -35,14 +36,22 @@ export default function Index() {
         if (!isMounted) return;
         const status = profile?.status ?? 'active';
         if (status === 'pending') {
+          setChecking(false);
+          clearTimeout(fallback);
           router.replace('/pending-approval');
           return;
         }
         if (status === 'denied') {
+          setChecking(false);
+          clearTimeout(fallback);
           router.replace('/pending-approval?status=denied');
           return;
         }
-        router.replace('/(tabs)');
+        const completed = await hasCompletedOnboarding(session.user.id);
+        if (!isMounted) return;
+        setChecking(false);
+        clearTimeout(fallback);
+        router.replace(completed ? '/(tabs)' : '/onboarding');
       } catch {
         if (isMounted) {
           setChecking(false);

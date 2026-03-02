@@ -3,6 +3,7 @@ import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { supabase } from '../lib/supabase/client';
 import { setNotificationResponseHandler } from '../lib/notifications/push';
+import { hasCompletedOnboarding } from '../lib/onboarding';
 
 export default function RootLayout() {
   const segments = useSegments();
@@ -39,9 +40,11 @@ export default function RootLayout() {
       } else if (status === 'denied' && firstSegment !== 'pending-approval') {
         router.replace('/pending-approval?status=denied');
       } else if (status === 'active') {
+        const completed = await hasCompletedOnboarding(session.user.id);
+        if (!isMounted) return;
         // Only send to tabs when on an auth entry screen; don’t kick them off tickets, etc.
-        if (firstSegment === '/' || firstSegment === 'sign-in') {
-          router.replace('/(tabs)');
+        if (firstSegment === '/' || firstSegment === 'sign-in' || firstSegment === 'onboarding') {
+          router.replace(completed ? '/(tabs)' : '/onboarding');
         }
       }
     });
@@ -65,8 +68,10 @@ export default function RootLayout() {
         router.replace('/pending-approval');
       } else if (status === 'denied' && firstSegment !== 'pending-approval') {
         router.replace('/pending-approval?status=denied');
-      } else if (status === 'active' && (firstSegment === '/' || firstSegment === 'sign-in')) {
-        router.replace('/(tabs)');
+      } else if (status === 'active' && (firstSegment === '/' || firstSegment === 'sign-in' || firstSegment === 'onboarding')) {
+        const completed = await hasCompletedOnboarding(session.user.id);
+        if (!isMounted) return;
+        router.replace(completed ? '/(tabs)' : '/onboarding');
       }
     };
 

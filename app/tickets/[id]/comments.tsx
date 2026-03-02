@@ -164,6 +164,8 @@ export default function TicketCommentsScreen() {
             data={list}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f2681c" />
             }

@@ -28,18 +28,7 @@ export const TRADE_LABELS: Record<string, string> = {
 };
 
 export const BUILDING_LABELS: Record<string, string> = {
-  framing: 'Framing',
-  electrical: 'Electrical',
-  plumbing: 'Plumbing',
-  hvac: 'HVAC',
-  countertops: 'Countertops',
-  flooring: 'Flooring',
-  painting: 'Painting',
-  windows_doors: 'Windows & Doors',
-  roofing: 'Roofing',
-  insulation: 'Insulation',
-  drywall: 'Drywall',
-  other: 'Other',
+  ...TRADE_LABELS,
 };
 
 export const PRIORITY_LABELS: Record<string, string> = {
@@ -54,6 +43,7 @@ export const PROFILE_ROLES = [
   'project_manager',
   'subcontractor',
   'designer',
+  'developer',
 ] as const;
 
 export type ProfileRole = (typeof PROFILE_ROLES)[number];
@@ -64,4 +54,5 @@ export const ROLE_TYPE_OPTIONS: { label: string; value: ProfileRole }[] = [
   { label: 'Property Manager', value: 'project_manager' },
   { label: 'Subcontractor', value: 'subcontractor' },
   { label: 'Designer', value: 'designer' },
+  { label: 'Developer', value: 'developer' },
 ];

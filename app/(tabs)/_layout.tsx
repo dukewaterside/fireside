@@ -105,6 +105,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="tickets"
+        options={{
+          title: 'Tickets',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="ticket-outline" size={size || 24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="contacts"
         options={{
           title: 'Contacts',
@@ -126,6 +135,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="profile"
         options={{
+          href: null,
           title: 'Profile',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person-outline" size={size || 24} color={color} />

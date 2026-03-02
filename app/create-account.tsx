@@ -1,5 +1,5 @@
 // Import React hooks for managing component state
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 // Import SafeAreaView to handle notches and safe areas on different devices
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,11 +18,10 @@ import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-font
 import { LogginButton } from '../components/LogginButton';
 // Import our custom picker component (better UX than native Picker)
 import { CustomPicker } from '../components/CustomPicker';
-import { CustomMultiPicker } from '../components/CustomMultiPicker';
 // Import our auth service and types
 import { signUp, UserRole, Trade, SignUpData } from '../lib/services/auth';
-import { supabase } from '../lib/supabase/client';
 import { TRADE_LABELS } from '../lib/constants/tickets';
+import { formatPhoneNumberInput } from '../lib/utils/phone';
 
 export default function CreateAccount() {
   // State variables to store form input values
@@ -37,45 +35,18 @@ export default function CreateAccount() {
   const [confirmPassword, setConfirmPassword] = useState('');
   
   // State for the role dropdown
-  // We use 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer' | '' as the type
+  // We use 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer' | 'Developer' | '' as the type
   // The empty string represents "no selection yet"
   const [role, setRole] = useState<UserRole | ''>('');
   
   // State for the trade dropdown (only shown for subcontractors)
   const [trade, setTrade] = useState<Trade | ''>('');
 
-  // State for assigned units (PM / Designer)
-  const [units, setUnits] = useState<{ id: string; unit_number: string }[]>([]);
-  const [unitsLoading, setUnitsLoading] = useState(false);
-  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
-
   // State to track if we're currently submitting the form (for loading state)
   const [isLoading, setIsLoading] = useState(false);
 
   // State to store any error messages to display to the user
   const [error, setError] = useState('');
-
-  const isPMOrID = role === 'Project Manager' || role === 'Designer';
-
-  const fetchUnits = useCallback(async () => {
-    setUnitsLoading(true);
-    setUnits([]);
-    const { data, error: e } = await supabase
-      .from('units')
-      .select('id, unit_number')
-      .order('unit_number', { ascending: true });
-    setUnitsLoading(false);
-    if (e) {
-      console.warn('[CreateAccount] Failed to load units:', e.message);
-      return;
-    }
-    setUnits((data as { id: string; unit_number: string }[]) ?? []);
-  }, []);
-
-  useEffect(() => {
-    if (isPMOrID) fetchUnits();
-    else setSelectedUnitIds([]);
-  }, [isPMOrID, fetchUnits]);
 
   // Load fonts (same pattern as login page)
   const [fontsLoaded] = useFonts({
@@ -152,12 +123,6 @@ export default function CreateAccount() {
       return false;
     }
 
-    // If role is Project Manager or Designer, at least one unit is required
-    if (isPMOrID && selectedUnitIds.length === 0) {
-      setError('Please select at least one assigned unit');
-      return false;
-    }
-
     // All validations passed!
     return true;
   };
@@ -185,7 +150,6 @@ export default function CreateAccount() {
         password: password,
         role: role as UserRole,
         trade: role === 'Subcontractor' ? (trade as Trade) : undefined,
-        assignedUnitIds: isPMOrID && selectedUnitIds.length > 0 ? selectedUnitIds : undefined,
       };
 
       const response = await signUp(signUpData);
@@ -193,49 +157,7 @@ export default function CreateAccount() {
         ? 'Your account was created. Please check your email and verify your address before signing in.'
         : 'Your account has been created successfully. You can now sign in.';
 
-      if (response.success && response.user?.id) {
-        const userId = response.user.id;
-
-        if (isPMOrID && selectedUnitIds.length > 0) {
-          const assignmentType =
-            role === 'Project Manager' ? 'project_manager' : 'designer';
-          const rows = selectedUnitIds.map((unit_id) => ({
-            user_id: userId,
-            unit_id,
-            assignment_type: assignmentType,
-          }));
-
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session || session.user?.id !== userId) {
-            await new Promise((r) => setTimeout(r, 600));
-          }
-
-          const { error: insertError } = await supabase
-            .from('unit_assignments')
-            .insert(rows);
-
-          if (insertError) {
-            console.error('[CreateAccount] unit_assignments insert failed:', insertError);
-            Alert.alert(
-              'Account created',
-              'Your account was created, but we could not save your unit assignments. Please sign in and contact an owner to assign your units.',
-              [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
-            );
-          } else {
-            Alert.alert(
-              'Account Created!',
-              accountCreatedMessage,
-              [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
-            );
-          }
-        } else {
-          Alert.alert(
-            'Account Created!',
-            accountCreatedMessage,
-            [{ text: 'OK', onPress: () => router.replace('/sign-in') }]
-          );
-        }
-      } else if (response.success) {
+      if (response.success) {
         Alert.alert(
           'Account Created!',
           accountCreatedMessage,
@@ -260,6 +182,7 @@ export default function CreateAccount() {
       <ScrollView 
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled" // Allows tapping buttons even when keyboard is open
+        keyboardDismissMode="interactive"
       >
         <View style={styles.container}>
           {/* Page Title */}
@@ -299,7 +222,7 @@ export default function CreateAccount() {
             placeholder="Phone"
             placeholderTextColor="#999"
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={(value) => setPhone(formatPhoneNumberInput(value))}
             keyboardType="phone-pad"      // Shows numeric keypad on mobile
             autoCapitalize="none"
           />
@@ -345,9 +268,6 @@ export default function CreateAccount() {
             onValueChange={(itemValue) => {
               setRole(itemValue);
               if (itemValue !== 'Subcontractor') setTrade('');
-              if (itemValue !== 'Project Manager' && itemValue !== 'Designer') {
-                setSelectedUnitIds([]);
-              }
             }}
             placeholder="Select Role"
             items={[
@@ -355,6 +275,7 @@ export default function CreateAccount() {
               { label: 'Project Manager', value: 'Project Manager' },
               { label: 'Owner', value: 'Owner' },
               { label: 'Designer', value: 'Designer' },
+              { label: 'Developer', value: 'Developer' },
             ]}
             hasError={error.includes('role')} // Show error styling if role validation failed
           />
@@ -369,29 +290,6 @@ export default function CreateAccount() {
               items={Object.entries(TRADE_LABELS).map(([value, label]) => ({ label, value: value as Trade }))}
               hasError={error.includes('trade')}
             />
-          )}
-
-          {/* Assigned units dropdown - only for Project Manager / Designer */}
-          {(role === 'Project Manager' || role === 'Designer') && (
-            <>
-              {unitsLoading ? (
-                <View style={styles.unitLoading}>
-                  <ActivityIndicator size="small" color="#f2681c" />
-                  <Text style={styles.unitLoadingText}>Loading units…</Text>
-                </View>
-              ) : (
-                <CustomMultiPicker
-                  selectedValues={selectedUnitIds}
-                  onValueChange={setSelectedUnitIds}
-                  items={units.map((u) => ({ label: u.unit_number, value: u.id }))}
-                  placeholder="Select units (by unit number)"
-                  hasError={error.includes('assigned unit')}
-                />
-              )}
-              {error.includes('assigned unit') && (
-                <Text style={styles.unitError}>Please select at least one assigned unit</Text>
-              )}
-            </>
           )}
 
           {/* Create Account Button */}
@@ -470,22 +368,5 @@ const styles = StyleSheet.create({
     color: '#f2681c',
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
-  },
-  unitLoading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 20,
-  },
-  unitLoadingText: {
-    fontSize: 16,
-    color: '#999',
-    fontFamily: 'Inter_400Regular',
-  },
-  unitError: {
-    fontSize: 12,
-    color: '#f2681c',
-    marginTop: 6,
   },
 });

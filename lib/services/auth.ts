@@ -3,6 +3,8 @@
 import { supabase } from '../supabase/client';
 import { TRADE_LABELS } from '../constants/tickets';
 
+const SIGNUP_EMAIL_REDIRECT_TO = 'fireside://sign-in';
+
 // Define TypeScript types for better code safety and autocomplete
 // This tells TypeScript what shape our data should have
 export interface AuthResponse {
@@ -13,7 +15,7 @@ export interface AuthResponse {
 }
 
 // Define the possible user roles in the system
-export type UserRole = 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer';
+export type UserRole = 'Subcontractor' | 'Project Manager' | 'Owner' | 'Designer' | 'Developer';
 
 // Define the possible trades (only for subcontractors)
 export type Trade = keyof typeof TRADE_LABELS;
@@ -83,6 +85,7 @@ function mapRoleToDatabase(role: UserRole): string {
     'Project Manager': 'project_manager',
     'Owner': 'owner',
     'Designer': 'designer',
+    'Developer': 'developer',
   };
   return roleMap[role];
 }
@@ -113,6 +116,7 @@ export async function signUp(signUpData: SignUpData): Promise<AuthResponse> {
       email: signUpData.email,
       password: signUpData.password,
       options: {
+        emailRedirectTo: SIGNUP_EMAIL_REDIRECT_TO,
         data: {
           first_name: signUpData.firstName,
           last_name: signUpData.lastName,

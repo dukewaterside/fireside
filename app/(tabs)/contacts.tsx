@@ -23,6 +23,7 @@ import { navigateToSignIn } from '../../lib/navigation';
 import { supabase } from '../../lib/supabase/client';
 import { TRADE_LABELS } from '../../lib/constants/tickets';
 import { ROLE_TYPE_OPTIONS } from '../../lib/constants/tickets';
+import { formatPhoneNumberDisplay, normalizePhoneDigits } from '../../lib/utils/phone';
 
 type Contact = {
   id: string;
@@ -37,7 +38,7 @@ type Contact = {
   unit_numbers: string[];
 };
 
-const ROLE_ORDER = ['owner', 'project_manager', 'designer', 'subcontractor'] as const;
+const ROLE_ORDER = ['owner', 'project_manager', 'designer', 'developer', 'subcontractor'] as const;
 
 type RoleFilter = 'all' | (typeof ROLE_ORDER)[number];
 
@@ -47,6 +48,7 @@ function roleSectionTitle(role: string): string {
   if (role === 'owner') return 'Owner';
   if (role === 'project_manager') return 'Project Manager';
   if (role === 'designer') return 'Designer';
+  if (role === 'developer') return 'Developer';
   if (role === 'subcontractor') return 'Subcontractor';
   return role;
 }
@@ -62,6 +64,7 @@ export default function ContactsScreen() {
   const [roleModalVisible, setRoleModalVisible] = useState(false);
   const [specialtyModalVisible, setSpecialtyModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -151,7 +154,9 @@ export default function ContactsScreen() {
 
   const handleCall = useCallback((phone: string | null) => {
     if (!phone?.trim()) return;
-    const url = `tel:${phone.trim()}`;
+    const dialable = normalizePhoneDigits(phone);
+    if (!dialable) return;
+    const url = `tel:${dialable}`;
     Linking.canOpenURL(url).then((can) => {
       if (can) Linking.openURL(url);
       else Alert.alert('Not supported', 'Calling is not available on this device.');
@@ -337,6 +342,47 @@ export default function ContactsScreen() {
         </Pressable>
       </Modal>
 
+      <Modal
+        visible={selectedContact != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedContact(null)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedContact(null)}>
+          <TouchableOpacity style={styles.contactModalCard} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.contactModalName}>
+              {selectedContact ? ([selectedContact.first_name, selectedContact.last_name].filter(Boolean).join(' ') || '—') : '—'}
+            </Text>
+            <Text style={styles.contactModalPhone}>
+              {selectedContact?.phone ? formatPhoneNumberDisplay(selectedContact.phone) : 'No phone number'}
+            </Text>
+            {selectedContact?.unit_numbers?.length ? (
+              <View style={styles.contactModalUnitsWrap}>
+                <Text style={styles.contactModalUnitsLabel}>Assigned units</Text>
+                <View style={styles.unitsChips}>
+                  {[...selectedContact.unit_numbers].sort().map((num) => (
+                    <View key={num} style={styles.unitChip}>
+                      <Text style={styles.unitChipText}>{num}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.actionButton, styles.contactModalCallButton]}
+              onPress={() => handleCall(selectedContact?.phone ?? null)}
+              disabled={!selectedContact?.phone?.trim()}
+            >
+              <Ionicons name="call-outline" size={20} color="#fff" />
+              <Text style={styles.actionButtonText}>Call</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={() => setSelectedContact(null)}>
+              <Text style={styles.modalCloseButtonText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#f2681c" />
@@ -366,6 +412,8 @@ export default function ContactsScreen() {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f2681c" />
           }
@@ -375,7 +423,12 @@ export default function ContactsScreen() {
             <View key={role} style={styles.section}>
               <Text style={styles.sectionTitle}>{roleSectionTitle(role)}</Text>
               {list.map((c) => (
-                <View key={c.id} style={styles.card}>
+                <TouchableOpacity
+                  key={c.id}
+                  style={styles.card}
+                  activeOpacity={0.86}
+                  onPress={() => setSelectedContact(c)}
+                >
                   <View style={styles.nameRow}>
                     <Text style={styles.name}>
                       {[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}
@@ -388,14 +441,14 @@ export default function ContactsScreen() {
                     <Text style={styles.contactPerson}>{c.company_name}</Text>
                   ) : null}
                   {c.phone ? (
-                    <Text style={styles.phone}>{c.phone}</Text>
+                    <Text style={styles.phone}>{formatPhoneNumberDisplay(c.phone)}</Text>
                   ) : (
                     <Text style={styles.phoneMuted}>No phone</Text>
                   )}
                   {c.role === 'subcontractor' && c.trade && (
                     <Text style={styles.trade}>{TRADE_LABELS[c.trade] ?? c.trade}</Text>
                   )}
-                  {(c.role === 'project_manager' || c.role === 'designer') &&
+                  {(c.role === 'project_manager' || c.role === 'designer' || c.role === 'developer') &&
                     c.unit_numbers.length > 0 && (
                       <View style={styles.unitsWrap}>
                         <Text style={styles.unitsLabel}>Units: </Text>
@@ -411,14 +464,17 @@ export default function ContactsScreen() {
                   <View style={styles.actions}>
                     <TouchableOpacity
                       style={styles.actionButton}
-                      onPress={() => handleCall(c.phone)}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleCall(c.phone);
+                      }}
                       disabled={!c.phone?.trim()}
                     >
                       <Ionicons name="call-outline" size={20} color="#fff" />
                       <Text style={styles.actionButtonText}>Call</Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           ))}
@@ -502,6 +558,50 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     maxHeight: '70%',
+  },
+  contactModalCard: {
+    width: '88%',
+    backgroundColor: '#3b3b3b',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#4a4a4a',
+    padding: 18,
+  },
+  contactModalName: {
+    fontSize: 22,
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  contactModalPhone: {
+    fontSize: 15,
+    color: '#d1d5db',
+    fontFamily: 'Inter_400Regular',
+    marginTop: 8,
+  },
+  contactModalUnitsWrap: {
+    marginTop: 14,
+  },
+  contactModalUnitsLabel: {
+    fontSize: 13,
+    color: '#9ca3af',
+    marginBottom: 8,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  contactModalCallButton: {
+    marginTop: 16,
+    justifyContent: 'center',
+  },
+  modalCloseButton: {
+    marginTop: 10,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#555',
+  },
+  modalCloseButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
   },
   modalHeader: {
     flexDirection: 'row',
