@@ -51,6 +51,29 @@ Run unit tests with `npm test` (or `npm run test:watch` for watch mode). After `
 - **Unit sort** (`lib/utils/__tests__/unitSort.test.ts`): unitSortKey and compareUnitNumbers so “Downhill 6-7” and similar unit labels sort correctly in the All Units list.
 - **Constants** (`lib/constants/__tests__/tickets.test.ts`): TRADE_LABELS, BUILDING_LABELS, PRIORITY_LABELS, PROFILE_ROLES, ROLE_TYPE_OPTIONS.
 
+## Notifications Setup
+
+### Push notifications (Expo + APNs)
+
+This project sends push notifications from Supabase Edge Function `send-push-notification` and registers Expo tokens in `profiles.expo_push_token`.
+
+For iOS production/TestFlight push, provide:
+
+- Apple **Team ID**
+- APNs auth key file (`.p8`)
+- APNs **Key ID** (example: `QS96372U5W`)
+- Apple account access to configure EAS iOS credentials
+
+### SMS notifications (Twilio)
+
+This project sends SMS notifications from Supabase Edge Function `send-sms-notification` (triggered on `public.notifications` inserts).
+
+Set these Edge Function secrets in Supabase:
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_NUMBER` (E.164, e.g. `+18601234567`)
+
 ## Resources
 
 - [Expo Documentation](https://docs.expo.dev/)
