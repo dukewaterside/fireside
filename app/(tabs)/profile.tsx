@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -69,6 +69,7 @@ function roleLabel(role: string | null): string {
 export default function ProfileScreen() {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signedOut, setSignedOut] = useState(false);
@@ -141,8 +142,9 @@ export default function ProfileScreen() {
     useCallback(() => {
       let mounted = true;
       (async () => {
-        setLoading(true);
+        if (!hasLoadedRef.current) setLoading(true);
         await fetchProfile();
+        hasLoadedRef.current = true;
         if (mounted) setLoading(false);
       })();
       return () => { mounted = false; };

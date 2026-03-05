@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -57,6 +57,7 @@ export default function ContactsScreen() {
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
@@ -138,8 +139,9 @@ export default function ContactsScreen() {
     useCallback(() => {
       let mounted = true;
       (async () => {
-        setLoading(true);
+        if (!hasLoadedRef.current) setLoading(true);
         await fetchContacts();
+        hasLoadedRef.current = true;
         if (mounted) setLoading(false);
       })();
       return () => { mounted = false; };
@@ -348,7 +350,7 @@ export default function ContactsScreen() {
         animationType="fade"
         onRequestClose={() => setSelectedContact(null)}
       >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedContact(null)}>
+        <TouchableOpacity style={styles.contactModalOverlay} activeOpacity={1} onPress={() => setSelectedContact(null)}>
           <TouchableOpacity style={styles.contactModalCard} activeOpacity={1} onPress={() => {}}>
             <Text style={styles.contactModalName}>
               {selectedContact ? ([selectedContact.first_name, selectedContact.last_name].filter(Boolean).join(' ') || '—') : '—'}
@@ -552,6 +554,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
+  },
+  contactModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: '#3b3b3b',

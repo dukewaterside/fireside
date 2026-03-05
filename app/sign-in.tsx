@@ -17,45 +17,17 @@ export default function SignInScreen() {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [error, setError] = useState('');
 
-  const PROFILE_STATUS_RETRY_COUNT = 6;
-  const PROFILE_STATUS_RETRY_DELAY_MS = 500;
   const SIGN_IN_RETRY_DELAY_MS = 1200;
 
   useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!isMounted || !session) return;
-        const status = await fetchProfileStatusWithRetry(session.user.id);
-        if (status === 'pending') router.replace('/pending-approval');
-        else if (status === 'denied') router.replace('/pending-approval?status=denied');
-        else router.replace('/(tabs)');
-      } catch {
-        // Ignore; stay on sign-in
-      }
-    })();
-    return () => { isMounted = false; };
+    // _layout.tsx handles routing via onAuthStateChange (INITIAL_SESSION event).
+    // Nothing to do here on mount.
   }, []);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
-
-  const fetchProfileStatusWithRetry = async (userId: string): Promise<'pending' | 'active' | 'denied'> => {
-    for (let attempt = 0; attempt < PROFILE_STATUS_RETRY_COUNT; attempt++) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('status')
-        .eq('id', userId)
-        .maybeSingle();
-      const status = (data as { status?: 'pending' | 'active' | 'denied' } | null)?.status;
-      if (status) return status;
-      await new Promise((resolve) => setTimeout(resolve, PROFILE_STATUS_RETRY_DELAY_MS));
-    }
-    return 'active';
-  };
 
   const handleSignIn = async () => {
     setError('');
@@ -68,6 +40,15 @@ export default function SignInScreen() {
       return;
     }
     setIsLoading(true);
+
+    // Safety net: reset loading after 20s if _layout.tsx never navigates away.
+    const loadingTimeout = setTimeout(() => setIsLoading(false), 20_000);
+
+    const stopLoading = () => {
+      clearTimeout(loadingTimeout);
+      setIsLoading(false);
+    };
+
     try {
       const emailNormalized = email.trim().toLowerCase();
       let response = await signIn(emailNormalized, password);
@@ -83,33 +64,25 @@ export default function SignInScreen() {
           response = await signIn(emailNormalized, password);
         }
       }
-      if (response && !response.success) {
+      if (!response.success) {
         setError(response.error || 'Failed to sign in');
+        stopLoading();
         return;
       }
       if (!response?.user) {
         setError('Could not finish sign-in. Please try again.');
+        stopLoading();
         return;
       }
 
-      const profileStatus = await fetchProfileStatusWithRetry(response.user.id);
-      if (profileStatus === 'pending') {
-        router.replace('/pending-approval');
-        return;
-      }
-      if (profileStatus === 'denied') {
-        const { signOut } = await import('../lib/services/auth');
-        await signOut();
-        setError('Your account was denied access. Please contact an owner.');
-        return;
-      }
+      // Sign-in succeeded. _layout.tsx's onAuthStateChange(SIGNED_IN) will fire
+      // and handle routing (to tabs, onboarding, or pending-approval). We stay
+      // in the loading state while that navigation happens — the 20s timeout
+      // above is the safety net if something unexpected prevents it.
       registerAndSavePushToken().catch(() => {});
-      const completed = await hasCompletedOnboarding(response.user.id);
-      router.replace(completed ? '/(tabs)' : '/onboarding');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-    } finally {
-      setIsLoading(false);
+      stopLoading();
     }
   };
 

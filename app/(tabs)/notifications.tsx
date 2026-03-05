@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
@@ -16,6 +18,7 @@ import { router } from 'expo-router';
 import { navigateToSignIn } from '../../lib/navigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
+import { BUILDING_LABELS } from '../../lib/constants/tickets';
 
 type NotificationRow = {
   id: string;
@@ -36,6 +39,79 @@ const NOTIFICATION_TITLES: Record<string, string> = {
 type RelatedStatusMap = Record<string, string>;
 type RelatedUserMap = Record<string, string>;
 
+type TicketInfo = { unit_number: string; building_element: string };
+type TicketInfoMap = Record<string, TicketInfo>;
+
+const DISMISS_WIDTH = 88;
+
+function getNotificationTitle(item: NotificationRow, ticketInfoMap: TicketInfoMap): string {
+  if (item.type === 'new_ticket') {
+    const info = ticketInfoMap[item.related_id];
+    if (info) {
+      const element = info.building_element
+        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
+        : null;
+      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
+      if (parts.length) return `New Ticket — ${parts.join(' • ')}`;
+    }
+    return 'New Ticket Created';
+  }
+  if (item.type === 'ticket_assigned') {
+    const info = ticketInfoMap[item.related_id];
+    if (info) {
+      const element = info.building_element
+        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
+        : null;
+      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
+      if (parts.length) return `Ticket Assigned — ${parts.join(' • ')}`;
+    }
+    return 'Ticket Assigned to You';
+  }
+  return NOTIFICATION_TITLES[item.type] ?? item.type;
+}
+
+function SwipeableRow({ onDismiss, children }: { onDismiss: () => void; children: React.ReactNode }) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const isOpen = useRef(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderMove: (_, g) => {
+        if (isOpen.current) {
+          translateX.setValue(Math.max(-DISMISS_WIDTH, Math.min(0, g.dx - DISMISS_WIDTH)));
+        } else {
+          translateX.setValue(Math.max(-DISMISS_WIDTH, Math.min(0, g.dx)));
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (!isOpen.current && g.dx < -(DISMISS_WIDTH / 2)) {
+          Animated.spring(translateX, { toValue: -DISMISS_WIDTH, useNativeDriver: true }).start();
+          isOpen.current = true;
+        } else {
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
+          isOpen.current = false;
+        }
+      },
+    })
+  ).current;
+
+  return (
+    <View style={swipeStyles.wrapper}>
+      <View style={swipeStyles.dismissAction}>
+        <TouchableOpacity style={swipeStyles.dismissButton} onPress={onDismiss} activeOpacity={0.8}>
+          <Ionicons name="trash-outline" size={22} color="#fff" />
+          <Text style={swipeStyles.dismissText}>Dismiss</Text>
+        </TouchableOpacity>
+      </View>
+      <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
+        {children}
+      </Animated.View>
+    </View>
+  );
+}
+
 type NotificationFilter = 'all' | 'tickets' | 'approvals';
 
 function filterNotifications(list: NotificationRow[], filter: NotificationFilter): NotificationRow[] {
@@ -54,6 +130,8 @@ export default function NotificationsScreen() {
   const [relatedUserName, setRelatedUserName] = useState<RelatedUserMap>({});
   const [filter, setFilter] = useState<NotificationFilter>('all');
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [ticketInfoMap, setTicketInfoMap] = useState<TicketInfoMap>({});
+  const hasLoadedRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -91,6 +169,28 @@ export default function NotificationsScreen() {
     const rows = (data as NotificationRow[]) ?? [];
     setList(rows);
 
+    // Fetch ticket details for new_ticket / ticket_assigned so we can show descriptive titles
+    const ticketIds = [...new Set(
+      rows.filter((n) => n.type === 'new_ticket' || n.type === 'ticket_assigned').map((n) => n.related_id)
+    )];
+    if (ticketIds.length > 0) {
+      const { data: tickets } = await supabase
+        .from('tickets')
+        .select('id, building_element, units(unit_number)')
+        .in('id', ticketIds);
+      const infoMap: TicketInfoMap = {};
+      (tickets ?? []).forEach((t: any) => {
+        const unit = Array.isArray(t.units) ? t.units[0] : t.units;
+        infoMap[t.id] = {
+          unit_number: unit?.unit_number ?? '',
+          building_element: t.building_element ?? '',
+        };
+      });
+      setTicketInfoMap(infoMap);
+    } else {
+      setTicketInfoMap({});
+    }
+
     // For user_approval items, fetch related profile status so we can show "User Approved" when already approved
     const approvalIds = [...new Set(rows.filter((n) => n.type === 'user_approval').map((n) => n.related_id))];
     if (approvalIds.length > 0) {
@@ -118,8 +218,9 @@ export default function NotificationsScreen() {
     useCallback(() => {
       let mounted = true;
       (async () => {
-        setLoading(true);
+        if (!hasLoadedRef.current) setLoading(true);
         await fetchNotifications();
+        hasLoadedRef.current = true;
         if (mounted) setLoading(false);
       })();
       return () => { mounted = false; };
@@ -140,6 +241,19 @@ export default function NotificationsScreen() {
     setList((prev) =>
       prev.map((n) => (n.id === notificationId ? { ...n, read_at: new Date().toISOString() } : n))
     );
+  }, []);
+
+  const dismissNotification = useCallback(async (notificationId: string) => {
+    // Optimistic remove immediately
+    setList((prev) => prev.filter((n) => n.id !== notificationId));
+    // Delete from DB; fall back to mark-as-read if RLS blocks delete
+    const { error } = await supabase.from('notifications').delete().eq('id', notificationId);
+    if (error) {
+      await supabase
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('id', notificationId);
+    }
   }, []);
 
   const handleApproveUser = useCallback(
@@ -274,7 +388,7 @@ export default function NotificationsScreen() {
                 >
                   <View style={[styles.rowDot, isUnread && styles.rowDotUnread]} />
                   <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>{NOTIFICATION_TITLES[item.type] ?? item.type}</Text>
+                    <Text style={styles.rowTitle}>{getNotificationTitle(item, ticketInfoMap)}</Text>
                     {item.type === 'user_approval' && (
                       <Text style={styles.rowSubTitle}>
                         User: {relatedUserName[item.related_id] ?? 'Loading...'}
@@ -336,7 +450,11 @@ export default function NotificationsScreen() {
                 </TouchableOpacity>
               </View>
             );
-            return <View key={item.id}>{rowContent}</View>;
+            return (
+              <SwipeableRow key={item.id} onDismiss={() => dismissNotification(item.id)}>
+                {rowContent}
+              </SwipeableRow>
+            );
           }}
         />
       )}
@@ -420,7 +538,6 @@ const styles = StyleSheet.create({
   row: {
     backgroundColor: '#4a4a4a',
     borderRadius: 8,
-    marginBottom: 10,
     overflow: 'hidden',
   },
   rowUnread: {
@@ -514,5 +631,36 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     justifyContent: 'center',
     alignSelf: 'center',
+  },
+});
+
+const swipeStyles = StyleSheet.create({
+  wrapper: {
+    marginBottom: 10,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  dismissAction: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: DISMISS_WIDTH,
+    backgroundColor: '#c0392b',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dismissButton: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dismissText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    marginTop: 3,
   },
 });

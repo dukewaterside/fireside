@@ -92,6 +92,7 @@ export default function TicketsScreen() {
 
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [filterUnitId, setFilterUnitId] = useState<string | null>(initialUnitId || null);
@@ -217,8 +218,9 @@ export default function TicketsScreen() {
             setTicketsDemoCompleted(false);
           }
         }
-        setLoading(true);
+        if (!hasLoadedRef.current) setLoading(true);
         await fetchTickets();
+        hasLoadedRef.current = true;
         if (mounted) setLoading(false);
       })();
       return () => { mounted = false; };
