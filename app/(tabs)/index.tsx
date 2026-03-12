@@ -201,6 +201,11 @@ export default function HomeScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimeout(true), 5000);
+    return () => clearTimeout(t);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -466,8 +471,13 @@ export default function HomeScreen() {
     Linking.openURL(`tel:${normalizePhoneForDial(person.phone)}`);
   }, []);
 
-  if (!fontsLoaded) {
-    return null;
+  // Never block the UI: show content after fonts load or after 5s (avoids blank/unresponsive screen on some devices)
+  if (!fontsLoaded && !fontTimeout) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: '#9ca3af', fontSize: 14 }}>Loading…</Text>
+      </View>
+    );
   }
 
   return (

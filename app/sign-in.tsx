@@ -1,20 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Image, View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { Image, View, Text, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import * as Linking from 'expo-linking';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { LogginButton } from '../components/LogginButton';
-import { signIn, resetPasswordForEmail } from '../lib/services/auth';
-import { supabase } from '../lib/supabase/client';
-import { hasCompletedOnboarding } from '../lib/onboarding';
+import { signIn } from '../lib/services/auth';
 import { registerAndSavePushToken } from '../lib/notifications/push';
 
 export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [error, setError] = useState('');
 
   const SIGN_IN_RETRY_DELAY_MS = 1200;
@@ -86,33 +81,6 @@ export default function SignInScreen() {
     }
   };
 
-  const handleForgotPassword = async () => {
-    setError('');
-    const emailToUse = email.trim().toLowerCase();
-    if (!emailToUse) {
-      setError('Enter your email above, then tap Forgot Password.');
-      return;
-    }
-    setIsResettingPassword(true);
-    try {
-      const redirectTo = Linking.createURL('reset-password');
-      const response = await resetPasswordForEmail(emailToUse, { redirectTo });
-      if (response.success) {
-        Alert.alert(
-          'Check your email',
-          'If an account exists for that email, we sent a code. Enter it on the next screen to set a new password.',
-          [{ text: 'OK', onPress: () => router.push(`/reset-password?email=${encodeURIComponent(emailToUse)}`) }]
-        );
-      } else {
-        setError(response.error || 'Something went wrong. Try again later.');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-    } finally {
-      setIsResettingPassword(false);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <ScrollView
@@ -146,23 +114,10 @@ export default function SignInScreen() {
               <Text style={styles.errorText}>{error}</Text>
             </View>
           ) : null}
-          <TouchableOpacity
-            style={styles.forgotPassword}
-            onPress={handleForgotPassword}
-            disabled={isResettingPassword}
-          >
-            <Text style={styles.forgotPasswordText}>
-              {isResettingPassword ? 'Sending…' : 'Forgot Password?'}
-            </Text>
-          </TouchableOpacity>
           <LogginButton
             label={isLoading ? 'Signing In...' : 'Sign In'}
             onPress={handleSignIn}
             backgroundColor={isLoading ? '#999' : '#f2681c'}
-          />
-          <LogginButton
-            label="Create New Account"
-            onPress={() => router.push('/create-account')}
           />
         </View>
       </ScrollView>
@@ -201,8 +156,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     backgroundColor: '#4a4a4a',
   },
-  forgotPassword: { alignSelf: 'flex-end', marginBottom: 20, marginTop: -10 },
-  forgotPasswordText: { color: '#f2681c', fontSize: 14, fontFamily: 'Inter_400Regular' },
   errorContainer: { width: '100%', backgroundColor: '#ff4444', padding: 12, borderRadius: 8, marginBottom: 20 },
   errorText: { color: 'white', fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center' },
 });

@@ -37,7 +37,9 @@ const BUILDING_OPTIONS = [
   { label: 'Windows & Doors', value: 'windows_doors' },
   { label: 'Roofing', value: 'roofing' },
   { label: 'Insulation', value: 'insulation' },
+  { label: 'Masonry', value: 'masonry' },
   { label: 'Drywall', value: 'drywall' },
+  { label: 'IT', value: 'it' },
   { label: 'Other', value: 'other' },
 ];
 

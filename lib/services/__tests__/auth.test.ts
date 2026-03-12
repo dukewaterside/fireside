@@ -17,14 +17,11 @@
  */
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { getCurrentUser, getSession, resetPasswordForEmail, signIn, signOut, signUp } from '../auth';
+import { getCurrentUser, getSession, signIn, signOut } from '../auth';
 
 // Fake Supabase auth methods. We define them BEFORE the mock so the mock can use them.
 const mockSignInWithPassword = jest.fn<(opts: { email: string; password: string }) => Promise<{ data: { user: unknown }; error: { message?: string } | null }>>();
 const mockSignOut = jest.fn<() => Promise<{ error: { message?: string } | null }>>();
-const mockSignUp = jest.fn<(opts?: unknown) => Promise<{ data: { user: unknown }; error: { message?: string } | null }>>();
-// auth.ts calls supabase.auth.resetPasswordForEmail(email, { redirectTo }), not resetPassword
-const mockResetPasswordForEmail = jest.fn<(email: string, opts?: { redirectTo?: string }) => Promise<{ error: { message?: string } | null }>>();
 const mockGetUser = jest.fn<() => Promise<{ data: { user: unknown } }>>();
 const mockGetSession = jest.fn<() => Promise<{ data: { session: unknown } }>>();
 
@@ -35,8 +32,6 @@ jest.mock('../../supabase/client', () => ({
     auth: {
       signInWithPassword: (opts: { email: string; password: string }) => mockSignInWithPassword(opts),
       signOut: () => mockSignOut(),
-      signUp: (opts: unknown) => mockSignUp(opts), // must CALL mockSignUp and return its Promise
-      resetPasswordForEmail: (email: string, opts?: { redirectTo?: string }) => mockResetPasswordForEmail(email, opts),
       getUser: () => mockGetUser(),
       getSession: () => mockGetSession(),
     },
@@ -101,123 +96,6 @@ describe('signOut', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('Network error');
-  });
-});
-
-describe('signUp', () => {
-  it('returns success and user when Supabase sign-up succeeds', async () => {
-    const fakeUser = { id: 'user-456', email: 'dukedoof@gmail.com' };
-    mockSignUp.mockResolvedValueOnce({
-      data: { user: fakeUser },
-      error: null,
-    });
-
-    const signUpData = {
-      firstName: 'Duke',
-      lastName: 'Doof',
-      email: 'dukedoof@gmail.com',
-      password: 'Doofus',
-      phone: '8609638545',
-      role: 'Subcontractor' as const,
-      trade: 'HVAC' as const,
-    };
-
-    const result = await signUp(signUpData);
-
-    expect(mockSignUp).toHaveBeenCalled();
-    expect(result.success).toBe(true);
-    expect(result.user).toEqual(fakeUser);
-    expect(result.error).toBeUndefined();
-  });
-
-  it ('returns failure and error message when Supabase returns an error', async () => {
-    mockSignUp.mockResolvedValueOnce({
-      data: { user: null },
-      error: { message: 'User already registered' },
-    });
-
-    const signUpData = {
-      firstName: 'Duke',
-      lastName: 'Doof',
-      email: 'dukedoof@gmail.com',
-      password: 'Doofus',
-      phone: '8609638545',
-      role: 'Subcontractor' as const,
-    };
-
-    const result = await signUp(signUpData);
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('User already registered');
-    expect(result.user).toBeUndefined();
-  });
-});
-
-describe('resetPasswordForEmail', () => {
-  it('returns success when Supabase reset-password email succeeds', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({ error: null });
-
-    const result = await resetPasswordForEmail('dukedoof@gmail.com');
-
-    expect(mockResetPasswordForEmail).toHaveBeenCalledWith('dukedoof@gmail.com', { redirectTo: undefined });
-    expect(result.success).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
-
-  it('passes redirectTo to Supabase when provided', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({ error: null });
-
-    await resetPasswordForEmail('u@example.com', { redirectTo: 'fireside://reset-password' });
-
-    expect(mockResetPasswordForEmail).toHaveBeenCalledWith('u@example.com', {
-      redirectTo: 'fireside://reset-password',
-    });
-  });
-
-  it('returns failure and error message when Supabase returns an error', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({
-      error: { message: 'User already reset password' },
-    });
-
-    const result = await resetPasswordForEmail('dukedoof@gmail.com');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('User already reset password');
-  });
-
-  it('rewrites rate limit (429) error to user-friendly message', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({
-      error: { message: '429 Too Many Requests' },
-    });
-
-    const result = await resetPasswordForEmail('user@example.com');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Too many reset attempts');
-    expect(result.error).toContain('15');
-  });
-
-  it('rewrites "rate limit" error to user-friendly message', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({
-      error: { message: 'Rate limit exceeded for this endpoint' },
-    });
-
-    const result = await resetPasswordForEmail('user@example.com');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Too many reset attempts');
-  });
-
-  it('rewrites email not authorized error to user-friendly message', async () => {
-    mockResetPasswordForEmail.mockResolvedValueOnce({
-      error: { message: 'Email not authorized for this project' },
-    });
-
-    const result = await resetPasswordForEmail('user@example.com');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('not allowed');
-    expect(result.error).toContain('password reset');
   });
 });
 

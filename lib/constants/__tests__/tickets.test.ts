@@ -26,6 +26,7 @@ describe('TRADE_LABELS', () => {
       'hardwood_flooring',
       'hvac',
       'insulation',
+      'it',
       'masonry',
       'other',
       'painting',

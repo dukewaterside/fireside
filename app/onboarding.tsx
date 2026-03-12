@@ -5,7 +5,7 @@ import {
   StyleSheet,
   FlatList,
   Dimensions,
-  TouchableOpacity,
+  Pressable,
   NativeScrollEvent,
   NativeSyntheticEvent,
 } from 'react-native';
@@ -16,6 +16,8 @@ import { supabase } from '../lib/supabase/client';
 import { markOnboardingCompleted } from '../lib/onboarding';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Minimum touch target size (Apple HIG); use hitSlop to extend small buttons
+const MIN_TOUCH_SLOP = 22;
 
 type Slide = {
   id: string;
@@ -98,9 +100,15 @@ export default function OnboardingScreen() {
       <View style={styles.topRow}>
         <Text style={styles.progress}>{index + 1}/{SLIDES.length}</Text>
         {!atEnd ? (
-          <TouchableOpacity onPress={finish}>
+          <Pressable
+            onPress={finish}
+            hitSlop={MIN_TOUCH_SLOP}
+            style={({ pressed }) => [styles.skipWrap, pressed && styles.skipPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Skip onboarding"
+          >
             <Text style={styles.skip}>Skip</Text>
-          </TouchableOpacity>
+          </Pressable>
         ) : <View style={{ width: 40 }} />}
       </View>
 
@@ -112,6 +120,8 @@ export default function OnboardingScreen() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={handleScrollEnd}
+        style={styles.slidesList}
+        contentContainerStyle={styles.slidesListContent}
         renderItem={({ item }) => (
           <View style={styles.slide}>
             <View style={styles.iconWrap}>
@@ -131,9 +141,15 @@ export default function OnboardingScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerHint}>{current.title}</Text>
-        <TouchableOpacity style={styles.nextButton} onPress={goNext}>
+        <Pressable
+          onPress={goNext}
+          style={({ pressed }) => [styles.nextButton, pressed && styles.nextButtonPressed]}
+          hitSlop={MIN_TOUCH_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel={atEnd ? 'Start Using Fireside' : 'Next'}
+        >
           <Text style={styles.nextButtonText}>{atEnd ? 'Start Using Fireside' : 'Next'}</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
     </SafeAreaView>
   );
@@ -155,10 +171,27 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     fontSize: 13,
   },
+  skipWrap: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  skipPressed: {
+    opacity: 0.7,
+  },
   skip: {
     color: '#f2681c',
     fontSize: 14,
     fontWeight: '600',
+  },
+  slidesList: {
+    flex: 1,
+  },
+  slidesListContent: {
+    flexGrow: 1,
   },
   slide: {
     width: SCREEN_WIDTH,
@@ -218,7 +251,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2681c',
     borderRadius: 10,
     paddingVertical: 14,
+    minHeight: 48,
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  nextButtonPressed: {
+    opacity: 0.9,
   },
   nextButtonText: {
     color: '#fff',

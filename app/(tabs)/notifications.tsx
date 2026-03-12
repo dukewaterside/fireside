@@ -10,6 +10,7 @@ import {
   Alert,
   Animated,
   PanResponder,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
@@ -23,7 +24,7 @@ import { BUILDING_LABELS } from '../../lib/constants/tickets';
 type NotificationRow = {
   id: string;
   recipient_id: string;
-  type: 'user_approval' | 'new_ticket' | 'ticket_assigned';
+  type: 'user_approval' | 'new_ticket' | 'ticket_assigned' | 'new_comment';
   related_id: string;
   read_at: string | null;
   created_at: string;
@@ -33,6 +34,7 @@ const NOTIFICATION_TITLES: Record<string, string> = {
   user_approval: 'User needs approval',
   new_ticket: 'New ticket created',
   ticket_assigned: 'Ticket assigned to you',
+  new_comment: 'New comment',
 };
 
 // related_id (user_approval) -> profile status so we can show "User Approved" after approval
@@ -43,8 +45,10 @@ type TicketInfo = { unit_number: string; building_element: string };
 type TicketInfoMap = Record<string, TicketInfo>;
 
 const DISMISS_WIDTH = 88;
+const SWIPE_DISMISS_THRESHOLD = 72; // Swipe past this to auto-dismiss (one gesture)
+const VELOCITY_DISMISS_THRESHOLD = 0.4; // Leftward velocity above this triggers dismiss
 
-function getNotificationTitle(item: NotificationRow, ticketInfoMap: TicketInfoMap): string {
+function getNotificationTitle(item: NotificationRow, ticketInfoMap: TicketInfoMap, commentDataMap: Record<string, { ticket_id: string; message: string; author_name: string }>): string {
   if (item.type === 'new_ticket') {
     const info = ticketInfoMap[item.related_id];
     if (info) {
@@ -67,31 +71,53 @@ function getNotificationTitle(item: NotificationRow, ticketInfoMap: TicketInfoMa
     }
     return 'Ticket Assigned to You';
   }
+  if (item.type === 'new_comment') {
+    const comment = commentDataMap[item.related_id];
+    const ticketId = comment?.ticket_id;
+    const info = ticketId ? ticketInfoMap[ticketId] : undefined;
+    if (info) {
+      const element = info.building_element
+        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
+        : null;
+      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
+      if (parts.length) return `New Comment — ${parts.join(' • ')}`;
+    }
+    return 'New Comment';
+  }
   return NOTIFICATION_TITLES[item.type] ?? item.type;
 }
 
 function SwipeableRow({ onDismiss, children }: { onDismiss: () => void; children: React.ReactNode }) {
   const translateX = useRef(new Animated.Value(0)).current;
-  const isOpen = useRef(false);
+  const screenWidth = Dimensions.get('window').width;
 
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        Math.abs(g.dx) > 5 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
       onPanResponderMove: (_, g) => {
-        if (isOpen.current) {
-          translateX.setValue(Math.max(-DISMISS_WIDTH, Math.min(0, g.dx - DISMISS_WIDTH)));
-        } else {
-          translateX.setValue(Math.max(-DISMISS_WIDTH, Math.min(0, g.dx)));
-        }
+        const dx = Math.min(0, g.dx);
+        translateX.setValue(dx);
       },
       onPanResponderRelease: (_, g) => {
-        if (!isOpen.current && g.dx < -(DISMISS_WIDTH / 2)) {
-          Animated.spring(translateX, { toValue: -DISMISS_WIDTH, useNativeDriver: true }).start();
-          isOpen.current = true;
+        const threshold = SWIPE_DISMISS_THRESHOLD;
+        const velocityLeft = g.vx < 0 ? -g.vx : 0;
+        const shouldDismiss =
+          g.dx < -threshold || velocityLeft > VELOCITY_DISMISS_THRESHOLD;
+
+        if (shouldDismiss) {
+          Animated.timing(translateX, {
+            toValue: -screenWidth,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => onDismiss());
         } else {
-          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
-          isOpen.current = false;
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 280,
+            friction: 32,
+          }).start();
         }
       },
     })
@@ -131,6 +157,7 @@ export default function NotificationsScreen() {
   const [filter, setFilter] = useState<NotificationFilter>('all');
   const [userRole, setUserRole] = useState<string | null>(null);
   const [ticketInfoMap, setTicketInfoMap] = useState<TicketInfoMap>({});
+  const [commentDataMap, setCommentDataMap] = useState<Record<string, { ticket_id: string; message: string; author_name: string }>>({});
   const hasLoadedRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
@@ -169,9 +196,29 @@ export default function NotificationsScreen() {
     const rows = (data as NotificationRow[]) ?? [];
     setList(rows);
 
-    // Fetch ticket details for new_ticket / ticket_assigned so we can show descriptive titles
+    // Fetch comment details for new_comment to get the ticket_id and message
+    const commentIds = [...new Set(rows.filter((n) => n.type === 'new_comment').map((n) => n.related_id))];
+    const commentMap: Record<string, { ticket_id: string; message: string; author_name: string }> = {};
+    if (commentIds.length > 0) {
+      const { data: comments } = await supabase
+        .from('ticket_comments')
+        .select('id, ticket_id, message, profiles(first_name, last_name)')
+        .in('id', commentIds);
+      (comments ?? []).forEach((c) => {
+        const p = Array.isArray(c.profiles) ? c.profiles[0] : c.profiles;
+        const authorName = p ? [p.first_name, p.last_name].filter(Boolean).join(' ') : 'Someone';
+        commentMap[c.id] = { ticket_id: c.ticket_id, message: c.message, author_name: authorName };
+      });
+    }
+    setCommentDataMap(commentMap);
+
+    // Fetch ticket details for new_ticket / ticket_assigned / new_comment so we can show descriptive titles
     const ticketIds = [...new Set(
-      rows.filter((n) => n.type === 'new_ticket' || n.type === 'ticket_assigned').map((n) => n.related_id)
+      rows.map((n) => {
+        if (n.type === 'new_ticket' || n.type === 'ticket_assigned') return n.related_id;
+        if (n.type === 'new_comment') return commentMap[n.related_id]?.ticket_id;
+        return null;
+      }).filter(Boolean) as string[]
     )];
     if (ticketIds.length > 0) {
       const { data: tickets } = await supabase
@@ -295,9 +342,14 @@ export default function NotificationsScreen() {
       }
       if (item.type === 'new_ticket' || item.type === 'ticket_assigned') {
         router.push({ pathname: '/tickets/[id]', params: { id: item.related_id } });
+      } else if (item.type === 'new_comment') {
+        const ticketId = commentDataMap[item.related_id]?.ticket_id;
+        if (ticketId) {
+          router.push({ pathname: '/tickets/[id]', params: { id: ticketId } });
+        }
       }
     },
-    [markAsRead]
+    [markAsRead, commentDataMap]
   );
 
   useEffect(() => {
@@ -388,10 +440,16 @@ export default function NotificationsScreen() {
                 >
                   <View style={[styles.rowDot, isUnread && styles.rowDotUnread]} />
                   <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>{getNotificationTitle(item, ticketInfoMap)}</Text>
+                    <Text style={styles.rowTitle}>{getNotificationTitle(item, ticketInfoMap, commentDataMap)}</Text>
                     {item.type === 'user_approval' && (
                       <Text style={styles.rowSubTitle}>
                         User: {relatedUserName[item.related_id] ?? 'Loading...'}
+                      </Text>
+                    )}
+                    {item.type === 'new_comment' && (
+                      <Text style={styles.rowSubTitle} numberOfLines={2}>
+                        {commentDataMap[item.related_id]?.author_name ? `${commentDataMap[item.related_id].author_name}: ` : ''}
+                        {commentDataMap[item.related_id]?.message ?? 'Loading...'}
                       </Text>
                     )}
                     <Text style={styles.rowDate}>
@@ -428,7 +486,7 @@ export default function NotificationsScreen() {
                         </TouchableOpacity>
                       )
                     )}
-                    {(item.type === 'new_ticket' || item.type === 'ticket_assigned') && (
+                    {(item.type === 'new_ticket' || item.type === 'ticket_assigned' || item.type === 'new_comment') && (
                       <View style={styles.viewTicketButton}>
                         <Text style={styles.viewTicketButtonText}>View ticket</Text>
                         <Ionicons name="chevron-forward" size={18} color="#f2681c" />
