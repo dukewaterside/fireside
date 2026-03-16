@@ -164,6 +164,11 @@ export default function NotificationsScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimeout(true), 5000);
+    return () => clearTimeout(t);
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     setError(null);
@@ -186,6 +191,7 @@ export default function NotificationsScreen() {
     const { data, error: e } = await supabase
       .from('notifications')
       .select('id, recipient_id, type, related_id, read_at, created_at')
+      .eq('recipient_id', session.user.id)
       .order('created_at', { ascending: false });
 
     if (e) {
@@ -358,7 +364,16 @@ export default function NotificationsScreen() {
     }
   }, [userRole]);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#f2681c" />
+          <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const filteredList = filterNotifications(list, filter);
   const showApprovalsFilter = userRole === 'owner';

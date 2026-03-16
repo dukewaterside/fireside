@@ -26,34 +26,42 @@ export default function TabsLayout() {
     useCallback(() => {
       let mounted = true;
       (async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            if (mounted) setUnreadCount(0);
+            return; // No redirect: tabs stay visible with sign-in prompts
+          }
+
+          // Redirect pending/denied users to approval screen (e.g. reopened app after status change)
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('status')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          const status = profile?.status ?? 'active';
+          if (mounted && status === 'pending') {
+            router.replace('/pending-approval');
+            return;
+          }
+          if (mounted && status === 'denied') {
+            router.replace('/pending-approval?status=denied');
+            return;
+          }
+          if (mounted && status === 'active') {
+            registerAndSavePushToken().catch(() => {});
+          }
+
+          // Only count this user's unread notifications (avoid large-table counts)
+          const { count, error } = await supabase
+            .from('notifications')
+            .select('*', { count: 'exact', head: true })
+            .eq('recipient_id', session.user.id)
+            .is('read_at', null);
+          if (mounted && !error) setUnreadCount(count ?? 0);
+        } catch {
           if (mounted) setUnreadCount(0);
-          return; // No redirect: tabs stay visible with sign-in prompts
         }
-        // Redirect pending/denied users to approval screen (e.g. reopened app after status change)
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('status')
-          .eq('id', session.user.id)
-          .single();
-        const status = profile?.status ?? 'active';
-        if (mounted && status === 'pending') {
-          router.replace('/pending-approval');
-          return;
-        }
-        if (mounted && status === 'denied') {
-          router.replace('/pending-approval?status=denied');
-          return;
-        }
-        if (mounted && status === 'active') {
-          registerAndSavePushToken().catch(() => {});
-        }
-        const { count, error } = await supabase
-          .from('notifications')
-          .select('*', { count: 'exact', head: true })
-          .is('read_at', null);
-        if (mounted && !error) setUnreadCount(count ?? 0);
       })();
       return () => { mounted = false; };
     }, [])
