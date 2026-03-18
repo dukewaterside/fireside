@@ -4,10 +4,10 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Dimensions,
   Pressable,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -15,7 +15,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase/client';
 import { markOnboardingCompleted } from '../lib/onboarding';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 // Minimum touch target size (Apple HIG); use hitSlop to extend small buttons
 const MIN_TOUCH_SLOP = 22;
 
@@ -66,6 +65,7 @@ const SLIDES: Slide[] = [
 ];
 
 export default function OnboardingScreen() {
+  const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<Slide>>(null);
   const [index, setIndex] = useState(0);
 
@@ -73,7 +73,7 @@ export default function OnboardingScreen() {
   const current = useMemo(() => SLIDES[index] ?? SLIDES[0], [index]);
 
   const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / screenWidth);
     setIndex(Math.max(0, Math.min(SLIDES.length - 1, nextIndex)));
   };
 
@@ -123,7 +123,7 @@ export default function OnboardingScreen() {
         style={styles.slidesList}
         contentContainerStyle={styles.slidesListContent}
         renderItem={({ item }) => (
-          <View style={styles.slide}>
+          <View style={[styles.slide, { width: screenWidth }]}>
             <View style={styles.iconWrap}>
               <Ionicons name={item.icon} size={40} color="#f2681c" />
             </View>
@@ -194,7 +194,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   slide: {
-    width: SCREEN_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 28,

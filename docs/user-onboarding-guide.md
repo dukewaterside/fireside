@@ -36,39 +36,19 @@ TestFlight is Apple's free app for installing beta apps. You only need to do thi
 
 ---
 
-## Step 4 — Open the App & Create Your Account
+## Step 4 — Open the App & Sign In
 
 1. Tap the **Fireside** icon on your home screen to launch the app.
-2. On the sign-in screen, tap **"Create New Account"**.
+2. On the sign-in screen, enter the **email** and **password** provided to you by your project admin.
+3. Tap **Sign In**.
 
-### Fill in your information:
-
-| Field | What to Enter |
-|-------|--------------|
-| **First Name** | Your first name |
-| **Last Name** | Your last name |
-| **Phone Number** | Your mobile number |
-| **Email** | Your work or personal email |
-| **Password** | Choose a secure password (8+ characters) |
-| **Role** | Select your role (see below) |
-
-### Choosing Your Role:
-
-- **Owner** — Project owner / developer
-- **Project Manager** — Manages units and coordinates work
-- **Designer** — Interior or architectural designer assigned to units
-- **Subcontractor** — Trade contractor (you'll also select your specialty)
-- **Developer** — Software/tech team
-
-If you select **Subcontractor**, you will be asked to choose your **Trade/Specialty** (e.g., Plumbing, Electrical, Framing, etc.).
-
-3. Tap **"Create Account"** when finished.
+> **Don't have login credentials?** Accounts are created by the project administrator. Contact your project owner or manager to receive your sign-in details.
 
 ---
 
-## Step 5 — Wait for Account Approval
+## Step 5 — Wait for Account Approval (if applicable)
 
-After creating your account, you will see a **"Pending Approval"** screen.
+If your account is pending:
 
 - Your account must be **approved by a project owner** before you can access the app.
 - You will receive a **push notification** once you have been approved.
@@ -146,28 +126,3 @@ The app has five main sections accessible from the bottom tab bar:
 - The **Profile** tab shows your account information.
 - You can update your **name**, **phone number**, and **role** here.
 - Tap **Sign Out** to log out of the app.
-
----
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| App is stuck on loading after sign-in | Swipe the app closed and reopen it. If this keeps happening, check your internet connection. |
-| Didn't receive approval notification | Ask a project owner to approve your account in the app. |
-| Forgot password | On the sign-in screen, enter your email and tap **"Forgot Password?"** — a reset link will be sent to your email. |
-| Can't find the app after install | Check your home screen and App Library. Search "Fireside" using Spotlight (swipe down from the middle of your screen). |
-| TestFlight invite link expired | Ask to be re-invited. TestFlight invites expire after 90 days. |
-
----
-
-## Tips
-
-- **Stay signed in** — the app keeps you signed in automatically. You only need to sign in once.
-- **Allow notifications** — make sure Fireside has notification permissions so you don't miss ticket updates.
-- **Pull to refresh** — on any screen, pull down to refresh the latest data.
-- **Updating the app** — when a new version is available, TestFlight will notify you. Open TestFlight and tap **Update** next to Fireside.
-
----
-
-*For technical issues or access problems, contact your project manager or the app administrator.*

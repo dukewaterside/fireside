@@ -1,10 +1,12 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { signOut } from '../lib/services/auth';
 import { LogginButton } from '../components/LogginButton';
+
+const FONT_LOAD_TIMEOUT_MS = 5000;
 
 export default function PendingApprovalScreen() {
   const { status } = useLocalSearchParams<{ status?: string }>();
@@ -14,13 +16,25 @@ export default function PendingApprovalScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimeout(true), FONT_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, []);
 
   const handleSignOut = async () => {
     await signOut();
     router.replace('/sign-in');
   };
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#f2681c" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
