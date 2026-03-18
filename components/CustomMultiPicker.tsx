@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -35,8 +35,10 @@ export function CustomMultiPicker({
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) return null;
 
   const toggle = (value: string) => {
     if (selectedValues.includes(value)) {
@@ -145,7 +147,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '70%',

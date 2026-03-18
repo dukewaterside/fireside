@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -44,6 +44,15 @@ type RoleFilter = 'all' | (typeof ROLE_ORDER)[number];
 
 const TRADE_KEYS = Object.keys(TRADE_LABELS);
 
+const ROLE_PILL_OPTIONS: { key: RoleFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'owner', label: 'Owner' },
+  { key: 'project_manager', label: 'PM' },
+  { key: 'designer', label: 'Designer' },
+  { key: 'developer', label: 'Developer' },
+  { key: 'subcontractor', label: 'Subcontractor' },
+];
+
 function roleSectionTitle(role: string): string {
   if (role === 'owner') return 'Owner';
   if (role === 'project_manager') return 'Project Manager';
@@ -51,6 +60,13 @@ function roleSectionTitle(role: string): string {
   if (role === 'developer') return 'Developer';
   if (role === 'subcontractor') return 'Subcontractor';
   return role;
+}
+
+function countActiveContactFilters(role: RoleFilter, trade: string | null): number {
+  let count = 0;
+  if (role !== 'all') count++;
+  if (trade !== null) count++;
+  return count;
 }
 
 export default function ContactsScreen() {
@@ -62,15 +78,21 @@ export default function ContactsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [tradeFilter, setTradeFilter] = useState<string | null>(null);
-  const [roleModalVisible, setRoleModalVisible] = useState(false);
-  const [specialtyModalVisible, setSpecialtyModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+
+  // Filter bottom sheet state
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [draftRole, setDraftRole] = useState<RoleFilter>('all');
+  const [draftTrade, setDraftTrade] = useState<string | null>(null);
+  const [tradePickerOpen, setTradePickerOpen] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
   const fetchContacts = useCallback(async () => {
     setError(null);
@@ -165,6 +187,29 @@ export default function ContactsScreen() {
     }).catch(() => Alert.alert('Error', 'Could not open phone.'));
   }, []);
 
+  // Filter modal helpers
+  const openFilterModal = useCallback(() => {
+    setDraftRole(roleFilter);
+    setDraftTrade(tradeFilter);
+    setTradePickerOpen(false);
+    setFilterModalVisible(true);
+  }, [roleFilter, tradeFilter]);
+
+  const applyFilters = useCallback(() => {
+    setRoleFilter(draftRole);
+    setTradeFilter(draftRole === 'subcontractor' ? draftTrade : null);
+    setFilterModalVisible(false);
+  }, [draftRole, draftTrade]);
+
+  const resetAllDrafts = useCallback(() => {
+    setDraftRole('all');
+    setDraftTrade(null);
+    setTradePickerOpen(false);
+  }, []);
+
+  const draftActiveCount = countActiveContactFilters(draftRole, draftRole === 'subcontractor' ? draftTrade : null);
+  const appliedActiveCount = countActiveContactFilters(roleFilter, roleFilter === 'subcontractor' ? tradeFilter : null);
+
   if (hasSession === false) {
     return (
       <SafeAreaView style={styles.container}>
@@ -178,7 +223,7 @@ export default function ContactsScreen() {
     );
   }
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) return null;
 
   const filteredByRole =
     roleFilter === 'all'
@@ -213,137 +258,190 @@ export default function ContactsScreen() {
     list: filteredContacts.filter((c) => c.role === role),
   })).filter((s) => s.list.length > 0);
 
-  const showSpecialtyFilter = roleFilter === 'subcontractor';
-  const roleFilterLabel = roleFilter === 'all' ? 'All' : roleSectionTitle(roleFilter);
+  const draftTradeLabel = draftTrade ? (TRADE_LABELS[draftTrade] ?? draftTrade) : 'All';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {/* Header: back | title | add */}
       <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Contacts</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search by name"
-          placeholderTextColor="#888"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="words"
-          autoCorrect={false}
-        />
-        <View style={styles.filterControls}>
-          <TouchableOpacity
-            style={[styles.filterControlButton, roleFilter !== 'all' && styles.filterButtonActive]}
-            onPress={() => setRoleModalVisible(true)}
-          >
-            <Text style={[styles.filterButtonText, roleFilter !== 'all' && styles.filterButtonTextActive]}>
-              Role: {roleFilterLabel}
-            </Text>
-            <Ionicons name="chevron-down" size={18} color={roleFilter !== 'all' ? '#fff' : '#999'} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.addContactButton}
-            onPress={() => router.push('/contacts/add')}
-          >
-            <Ionicons name="person-add-outline" size={16} color="#fff" />
-            <Text style={styles.addContactButtonText}>Add Contact</Text>
-          </TouchableOpacity>
-          {showSpecialtyFilter && (
-            <TouchableOpacity
-              style={[styles.filterControlButton, tradeFilter && styles.filterButtonActive]}
-              onPress={() => setSpecialtyModalVisible(true)}
-            >
-              <Text style={[styles.filterButtonText, tradeFilter && styles.filterButtonTextActive]}>
-                Specialty: {tradeFilter ? TRADE_LABELS[tradeFilter] ?? tradeFilter : 'All'}
-              </Text>
-              <Ionicons name="chevron-down" size={18} color={tradeFilter ? '#fff' : '#999'} />
-            </TouchableOpacity>
-          )}
-        </View>
+        <TouchableOpacity
+          style={styles.headerRight}
+          onPress={() => router.push('/contacts/add')}
+        >
+          <Ionicons name="add-circle-outline" size={28} color="#f2681c" />
+        </TouchableOpacity>
       </View>
 
+      {/* Search bar + filter icon */}
+      {!error && (
+        <View style={styles.searchRow}>
+          <View style={styles.searchWrap}>
+            <Ionicons name="search-outline" size={18} color="#999" />
+            <TextInput
+              style={styles.searchInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search contacts"
+              placeholderTextColor="#888"
+              autoCapitalize="words"
+              autoCorrect={false}
+            />
+          </View>
+          <TouchableOpacity
+            style={styles.filterIconButton}
+            onPress={openFilterModal}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="options-outline" size={22} color="#fff" />
+            {appliedActiveCount > 0 && <View style={styles.filterBadgeDot} />}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Count text */}
+      {!error && !loading && (
+        <Text style={styles.countText}>
+          {filteredContacts.length} {filteredContacts.length === 1 ? 'contact' : 'contacts'}
+        </Text>
+      )}
+
+      {/* Filter bottom sheet modal */}
       <Modal
-        visible={roleModalVisible}
+        visible={filterModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setRoleModalVisible(false)}
+        onRequestClose={() => setFilterModalVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setRoleModalVisible(false)}>
-          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Role</Text>
-              <TouchableOpacity onPress={() => setRoleModalVisible(false)} hitSlop={12}>
-                <Ionicons name="close" size={28} color="#999" />
-              </TouchableOpacity>
+        <Pressable
+          style={styles.filterModalBackdrop}
+          onPress={() => setFilterModalVisible(false)}
+        >
+          <Pressable style={styles.filterModalSheet} onPress={() => {}}>
+            <View style={styles.filterGrabHandleRow}>
+              <View style={styles.filterGrabHandle} />
             </View>
-            <FlatList
-              data={[{ key: 'all', label: 'All' }, ...ROLE_ORDER.map((r) => ({ key: r, label: roleSectionTitle(r) }))]}
-              keyExtractor={(item) => item.key}
-              style={styles.modalList}
-              renderItem={({ item }) => {
-                const selected = roleFilter === item.key;
-                return (
+            <Text style={styles.filterModalTitle}>Filter by:</Text>
+
+            <ScrollView
+              style={styles.filterModalScroll}
+              bounces={false}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* Role */}
+              <View style={styles.filterSection}>
+                <View style={styles.filterSectionHeader}>
+                  <Text style={styles.filterSectionLabel}>Role</Text>
+                  <TouchableOpacity onPress={() => setDraftRole('all')}>
+                    <Text style={styles.filterSectionReset}>Reset</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.pillRow}>
+                  {ROLE_PILL_OPTIONS.map((opt) => {
+                    const isSelected = draftRole === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[styles.pill, isSelected && styles.pillSelected]}
+                        onPress={() => {
+                          setDraftRole(opt.key);
+                          if (opt.key !== 'subcontractor') {
+                            setDraftTrade(null);
+                            setTradePickerOpen(false);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.pillText, isSelected && styles.pillTextSelected]}>
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Specialty (only when Role = Subcontractor) */}
+              {draftRole === 'subcontractor' && (
+                <View style={styles.filterSection}>
+                  <View style={styles.filterSectionHeader}>
+                    <Text style={styles.filterSectionLabel}>Specialty</Text>
+                    <TouchableOpacity onPress={() => { setDraftTrade(null); setTradePickerOpen(false); }}>
+                      <Text style={styles.filterSectionReset}>Reset</Text>
+                    </TouchableOpacity>
+                  </View>
                   <TouchableOpacity
-                    style={[styles.modalRow, selected && styles.modalRowSelected]}
-                    onPress={() => {
-                      const nextRole = item.key as RoleFilter;
-                      setRoleFilter(nextRole);
-                      if (nextRole !== 'subcontractor') setTradeFilter(null);
-                      setRoleModalVisible(false);
-                    }}
+                    style={styles.dropdownSelector}
+                    onPress={() => setTradePickerOpen(!tradePickerOpen)}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.modalRowText, selected && styles.modalRowTextSelected]}>
-                      {item.label}
+                    <Text style={[styles.dropdownSelectorText, draftTrade && styles.dropdownSelectorTextActive]}>
+                      {draftTradeLabel}
                     </Text>
-                    {selected && <Ionicons name="checkmark" size={22} color="#f2681c" />}
+                    <Ionicons
+                      name={tradePickerOpen ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color="#999"
+                    />
                   </TouchableOpacity>
-                );
-              }}
-            />
+                  {tradePickerOpen && (
+                    <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                      <TouchableOpacity
+                        style={[styles.dropdownItem, draftTrade === null && styles.dropdownItemSelected]}
+                        onPress={() => { setDraftTrade(null); setTradePickerOpen(false); }}
+                      >
+                        <Text style={[styles.dropdownItemText, draftTrade === null && styles.dropdownItemTextSelected]}>
+                          All
+                        </Text>
+                      </TouchableOpacity>
+                      {TRADE_KEYS.map((k) => (
+                        <TouchableOpacity
+                          key={k}
+                          style={[styles.dropdownItem, draftTrade === k && styles.dropdownItemSelected]}
+                          onPress={() => { setDraftTrade(k); setTradePickerOpen(false); }}
+                        >
+                          <Text style={[styles.dropdownItemText, draftTrade === k && styles.dropdownItemTextSelected]}>
+                            {TRADE_LABELS[k] ?? k}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+                </View>
+              )}
+
+              {/* Spacer for bottom buttons */}
+              <View style={{ height: 16 }} />
+            </ScrollView>
+
+            {/* Bottom action buttons */}
+            <View style={styles.filterModalActions}>
+              <TouchableOpacity
+                style={styles.resetAllButton}
+                onPress={resetAllDrafts}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.resetAllButtonText}>Reset All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.applyButton}
+                onPress={applyFilters}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.applyButtonText}>
+                  Apply Filters{draftActiveCount > 0 ? `(${draftActiveCount})` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
 
-      <Modal
-        visible={specialtyModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSpecialtyModalVisible(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setSpecialtyModalVisible(false)}>
-          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Specialty</Text>
-              <TouchableOpacity onPress={() => setSpecialtyModalVisible(false)} hitSlop={12}>
-                <Ionicons name="close" size={28} color="#999" />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={[{ key: '__all__', label: 'All' }, ...TRADE_KEYS.map((k) => ({ key: k, label: TRADE_LABELS[k] ?? k }))]}
-              keyExtractor={(item) => item.key}
-              style={styles.modalList}
-              renderItem={({ item }) => {
-                const selected = item.key === '__all__' ? tradeFilter === null : tradeFilter === item.key;
-                return (
-                  <TouchableOpacity
-                    style={[styles.modalRow, selected && styles.modalRowSelected]}
-                    onPress={() => {
-                      setTradeFilter(item.key === '__all__' ? null : item.key);
-                      setSpecialtyModalVisible(false);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.modalRowText, selected && styles.modalRowTextSelected]}>
-                      {item.label}
-                    </Text>
-                    {selected && <Ionicons name="checkmark" size={22} color="#f2681c" />}
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
-
+      {/* Contact detail modal */}
       <Modal
         visible={selectedContact != null}
         transparent
@@ -353,7 +451,7 @@ export default function ContactsScreen() {
         <TouchableOpacity style={styles.contactModalOverlay} activeOpacity={1} onPress={() => setSelectedContact(null)}>
           <TouchableOpacity style={styles.contactModalCard} activeOpacity={1} onPress={() => {}}>
             <Text style={styles.contactModalName}>
-              {selectedContact ? ([selectedContact.first_name, selectedContact.last_name].filter(Boolean).join(' ') || '—') : '—'}
+              {selectedContact ? ([selectedContact.first_name, selectedContact.last_name].filter(Boolean).join(' ') || '\u2014') : '\u2014'}
             </Text>
             <Text style={styles.contactModalPhone}>
               {selectedContact?.phone ? formatPhoneNumberDisplay(selectedContact.phone) : 'No phone number'}
@@ -433,7 +531,7 @@ export default function ContactsScreen() {
                 >
                   <View style={styles.nameRow}>
                     <Text style={styles.name}>
-                      {[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}
+                      {[c.first_name, c.last_name].filter(Boolean).join(' ') || '\u2014'}
                     </Text>
                     <View style={[styles.kindBadge, c.profile_id ? styles.kindBadgeLinked : styles.kindBadgeExternal]}>
                       <Text style={styles.kindBadgeText}>{c.profile_id ? 'App user' : 'External'}</Text>
@@ -487,89 +585,264 @@ export default function ContactsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#3b3b3b' },
+  container: { flex: 1, backgroundColor: '#2e2e2e' },
+  // Header
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#4a4a4a',
+    borderBottomColor: '#444',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
     color: '#fff',
   },
-  addContactButton: {
+  headerRight: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Search row
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: '#f2681c',
-    borderRadius: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    gap: 8,
   },
-  addContactButtonText: {
-    fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
+  searchWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#3a3a3a',
   },
   searchInput: {
-    marginTop: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: '#4a4a4a',
-    borderRadius: 8,
-    fontSize: 16,
+    flex: 1,
+    fontSize: 15,
     fontFamily: 'Inter_400Regular',
     color: '#fff',
+    paddingVertical: 0,
   },
-  filterControls: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 12,
-  },
-  filterControlButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+  filterIconButton: {
+    width: 40,
+    height: 40,
     borderRadius: 8,
-    backgroundColor: '#4a4a4a',
-    alignSelf: 'flex-start',
+    backgroundColor: '#3a3a3a',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  filterButtonActive: {
+  filterBadgeDot: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: '#f2681c',
   },
-  filterButtonText: {
-    fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
+  // Count text
+  countText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
     color: '#999',
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
   },
-  filterButtonTextActive: {
-    color: '#fff',
-  },
-  modalOverlay: {
+  // Filter bottom sheet modal
+  filterModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  filterModalSheet: {
+    backgroundColor: '#2e2e2e',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '85%',
+    paddingBottom: 24,
+  },
+  filterGrabHandleRow: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  filterGrabHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#666',
+  },
+  filterModalTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#444',
+  },
+  filterModalScroll: {
+    paddingHorizontal: 20,
+  },
+  filterSection: {
+    paddingTop: 16,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#444',
+  },
+  filterSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  filterSectionLabel: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  filterSectionReset: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#f2681c',
+  },
+  pillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  pill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#444',
+    backgroundColor: 'transparent',
+  },
+  pillSelected: {
+    backgroundColor: '#f2681c',
+    borderColor: '#f2681c',
+  },
+  pillText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#999',
+  },
+  pillTextSelected: {
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  dropdownSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#444',
+    backgroundColor: '#3a3a3a',
+    marginBottom: 4,
+  },
+  dropdownSelectorText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#999',
+  },
+  dropdownSelectorTextActive: {
+    color: '#fff',
+  },
+  dropdownList: {
+    maxHeight: 180,
+    borderWidth: 1,
+    borderColor: '#444',
+    borderRadius: 8,
+    backgroundColor: '#3a3a3a',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  dropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#444',
+  },
+  dropdownItemSelected: {
+    backgroundColor: '#4a4a4a',
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+  },
+  dropdownItemTextSelected: {
+    color: '#f2681c',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  filterModalActions: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#444',
+  },
+  resetAllButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#f2681c',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetAllButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#f2681c',
+  },
+  applyButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    backgroundColor: '#f2681c',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  applyButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  // Contact detail modal
   contactModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: {
-    backgroundColor: '#3b3b3b',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    maxHeight: '70%',
-  },
   contactModalCard: {
     width: '88%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#4a4a4a',
@@ -611,45 +884,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
   },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#4a4a4a',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  modalList: {
-    maxHeight: 400,
-    paddingBottom: 24,
-  },
-  modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#4a4a4a',
-  },
-  modalRowSelected: {
-    backgroundColor: '#4a4a4a',
-  },
-  modalRowText: {
-    fontSize: 16,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-  },
-  modalRowTextSelected: {
-    fontFamily: 'Inter_600SemiBold',
-    color: '#f2681c',
-  },
+  // Common
   centered: {
     flex: 1,
     justifyContent: 'center',
@@ -679,7 +914,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   card: {
-    backgroundColor: '#4a4a4a',
+    backgroundColor: '#3a3a3a',
     borderRadius: 8,
     padding: 16,
     marginBottom: 10,

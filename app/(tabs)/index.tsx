@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
+  TextInput,
   Dimensions,
   Modal,
   Alert,
@@ -186,6 +187,7 @@ export default function HomeScreen() {
   const [unitsError, setUnitsError] = useState<string | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<MapUnit | null>(null);
   const [unitsListModalVisible, setUnitsListModalVisible] = useState(false);
+  const [unitSearchQuery, setUnitSearchQuery] = useState('');
   const [contactCardPerson, setContactCardPerson] = useState<ProfileSnippet | null>(null);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -463,6 +465,12 @@ export default function HomeScreen() {
     [units]
   );
 
+  const filteredUnitsForList = useMemo(() => {
+    const q = unitSearchQuery.trim().toLowerCase();
+    if (!q) return sortedUnitsForList;
+    return sortedUnitsForList.filter((u) => u.unit_number.toLowerCase().includes(q));
+  }, [sortedUnitsForList, unitSearchQuery]);
+
   const callPerson = useCallback((person: ProfileSnippet | null | undefined) => {
     if (!person?.phone?.trim()) {
       Alert.alert('No phone number', `${displayName(person)} does not have a phone number yet.`);
@@ -474,7 +482,7 @@ export default function HomeScreen() {
   // Never block the UI: show content after fonts load or after 5s (avoids blank/unresponsive screen on some devices)
   if (!fontsLoaded && !fontTimeout) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, backgroundColor: '#2e2e2e', justifyContent: 'center', alignItems: 'center' }}>
         <Text style={{ color: '#9ca3af', fontSize: 14 }}>Loading…</Text>
       </View>
     );
@@ -614,18 +622,35 @@ export default function HomeScreen() {
         visible={unitsListModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setUnitsListModalVisible(false)}
+        onRequestClose={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
       >
         <TouchableOpacity
           style={styles.modalBackdrop}
           activeOpacity={1}
-          onPress={() => setUnitsListModalVisible(false)}
+          onPress={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
         >
           <TouchableOpacity style={styles.unitsListModal} activeOpacity={1} onPress={() => {}}>
             <Text style={styles.unitsListModalTitle}>All Units</Text>
             <Text style={styles.unitsListModalSubtitle}>Click to view</Text>
+            <View style={styles.unitSearchWrap}>
+              <Ionicons name="search-outline" size={16} color="#999" />
+              <TextInput
+                style={styles.unitSearchInput}
+                value={unitSearchQuery}
+                onChangeText={setUnitSearchQuery}
+                placeholder="Search by building name..."
+                placeholderTextColor="#888"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {unitSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setUnitSearchQuery('')}>
+                  <Ionicons name="close-circle" size={18} color="#999" />
+                </TouchableOpacity>
+              )}
+            </View>
             <ScrollView style={styles.unitsListScroll}>
-              {sortedUnitsForList.map((unit) => (
+              {filteredUnitsForList.map((unit) => (
                 <TouchableOpacity
                   key={unit.id}
                   style={styles.unitsListRow}
@@ -641,7 +666,7 @@ export default function HomeScreen() {
             </ScrollView>
             <TouchableOpacity
               style={styles.modalCloseButton}
-              onPress={() => setUnitsListModalVisible(false)}
+              onPress={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
             >
               <Text style={styles.modalCloseButtonText}>Close</Text>
             </TouchableOpacity>
@@ -849,7 +874,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   header: {
     flexDirection: 'row',
@@ -932,7 +957,7 @@ const styles = StyleSheet.create({
   },
   demoInfoModal: {
     width: '88%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderWidth: 1,
     borderColor: '#4a4a4a',
     borderRadius: 14,
@@ -1075,7 +1100,7 @@ const styles = StyleSheet.create({
   mapImage: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   mapInner: {
     position: 'relative',
@@ -1138,6 +1163,24 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#5a5a5a',
+  },
+  unitSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#555',
+  },
+  unitSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+    paddingVertical: 0,
   },
   unitsListScroll: {
     maxHeight: 400,

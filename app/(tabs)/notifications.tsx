@@ -1,16 +1,18 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
+  SectionList,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   RefreshControl,
   Alert,
   Animated,
   PanResponder,
   Dimensions,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
@@ -20,6 +22,10 @@ import { navigateToSignIn } from '../../lib/navigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
 import { BUILDING_LABELS } from '../../lib/constants/tickets';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type NotificationRow = {
   id: string;
@@ -44,48 +50,149 @@ type RelatedUserMap = Record<string, string>;
 type TicketInfo = { unit_number: string; building_element: string };
 type TicketInfoMap = Record<string, TicketInfo>;
 
-const DISMISS_WIDTH = 88;
-const SWIPE_DISMISS_THRESHOLD = 72; // Swipe past this to auto-dismiss (one gesture)
-const VELOCITY_DISMISS_THRESHOLD = 0.4; // Leftward velocity above this triggers dismiss
+type NotificationFilter = 'all' | 'tickets' | 'approvals';
+
+// ---------------------------------------------------------------------------
+// Helpers (preserved)
+// ---------------------------------------------------------------------------
 
 function getNotificationTitle(item: NotificationRow, ticketInfoMap: TicketInfoMap, commentDataMap: Record<string, { ticket_id: string; message: string; author_name: string }>): string {
   if (item.type === 'new_ticket') {
     const info = ticketInfoMap[item.related_id];
-    if (info) {
-      const element = info.building_element
-        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
-        : null;
-      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
-      if (parts.length) return `New Ticket — ${parts.join(' • ')}`;
-    }
-    return 'New Ticket Created';
+    if (info?.unit_number) return `New ticket in ${info.unit_number}`;
+    return 'New ticket created';
   }
   if (item.type === 'ticket_assigned') {
     const info = ticketInfoMap[item.related_id];
-    if (info) {
-      const element = info.building_element
-        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
-        : null;
-      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
-      if (parts.length) return `Ticket Assigned — ${parts.join(' • ')}`;
-    }
-    return 'Ticket Assigned to You';
+    if (info?.unit_number) return `Assigned to you — ${info.unit_number}`;
+    return 'Ticket assigned to you';
   }
   if (item.type === 'new_comment') {
     const comment = commentDataMap[item.related_id];
-    const ticketId = comment?.ticket_id;
-    const info = ticketId ? ticketInfoMap[ticketId] : undefined;
-    if (info) {
-      const element = info.building_element
-        ? (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element
-        : null;
-      const parts = [info.unit_number ? `Unit ${info.unit_number}` : null, element].filter(Boolean);
-      if (parts.length) return `New Comment — ${parts.join(' • ')}`;
-    }
-    return 'New Comment';
+    const info = comment?.ticket_id ? ticketInfoMap[comment.ticket_id] : undefined;
+    if (info?.unit_number) return `New comment on ${info.unit_number}`;
+    return 'New comment on a ticket';
   }
+  if (item.type === 'user_approval') return 'New user awaiting approval';
   return NOTIFICATION_TITLES[item.type] ?? item.type;
 }
+
+function getNotificationSubtitle(item: NotificationRow, ticketInfoMap: TicketInfoMap, commentDataMap: Record<string, { ticket_id: string; message: string; author_name: string }>, relatedUserName: RelatedUserMap): string | null {
+  if (item.type === 'new_ticket' || item.type === 'ticket_assigned') {
+    const info = ticketInfoMap[item.related_id];
+    if (info?.building_element) {
+      return (BUILDING_LABELS as Record<string, string>)[info.building_element] ?? info.building_element;
+    }
+    return null;
+  }
+  if (item.type === 'new_comment') {
+    const comment = commentDataMap[item.related_id];
+    if (comment) return `${comment.author_name}: ${comment.message}`;
+    return null;
+  }
+  if (item.type === 'user_approval') {
+    return relatedUserName[item.related_id] ?? null;
+  }
+  return null;
+}
+
+function filterNotifications(list: NotificationRow[], filter: NotificationFilter): NotificationRow[] {
+  if (filter === 'all') return list;
+  if (filter === 'tickets') return list.filter((n) => n.type === 'new_ticket' || n.type === 'ticket_assigned' || n.type === 'new_comment');
+  return list.filter((n) => n.type === 'user_approval');
+}
+
+// ---------------------------------------------------------------------------
+// Relative time helper
+// ---------------------------------------------------------------------------
+
+function timeAgo(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) return 'Just now';
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return 'Just now';
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 8) return `${weeks}w ago`;
+
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Time-grouping helper
+// ---------------------------------------------------------------------------
+
+type SectionData = { title: string; data: NotificationRow[] };
+
+function groupByTimePeriod(items: NotificationRow[]): SectionData[] {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+  // Start of this week (Sunday)
+  const dayOfWeek = now.getDay();
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
+
+  const today: NotificationRow[] = [];
+  const thisWeek: NotificationRow[] = [];
+  const earlier: NotificationRow[] = [];
+
+  for (const item of items) {
+    const ts = new Date(item.created_at).getTime();
+    if (ts >= todayStart) {
+      today.push(item);
+    } else if (ts >= weekStart) {
+      thisWeek.push(item);
+    } else {
+      earlier.push(item);
+    }
+  }
+
+  const sections: SectionData[] = [];
+  if (today.length > 0) sections.push({ title: 'Today', data: today });
+  if (thisWeek.length > 0) sections.push({ title: 'This Week', data: thisWeek });
+  if (earlier.length > 0) sections.push({ title: 'Earlier', data: earlier });
+
+  return sections;
+}
+
+// ---------------------------------------------------------------------------
+// Notification icon helper
+// ---------------------------------------------------------------------------
+
+function getNotificationIcon(type: NotificationRow['type']): { name: keyof typeof Ionicons.glyphMap; color: string } {
+  switch (type) {
+    case 'new_ticket':
+    case 'ticket_assigned':
+      return { name: 'document-text', color: '#f2681c' };
+    case 'user_approval':
+      return { name: 'person-add', color: '#6fcf7a' };
+    case 'new_comment':
+      return { name: 'chatbubble', color: '#5b9bd5' };
+    default:
+      return { name: 'notifications', color: '#f2681c' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SwipeableRow — smooth PanResponder with spring animation
+// ---------------------------------------------------------------------------
+
+const DISMISS_WIDTH = 70;
+const SWIPE_DISMISS_THRESHOLD = 72;
+const VELOCITY_DISMISS_THRESHOLD = 0.4;
 
 function SwipeableRow({ onDismiss, children }: { onDismiss: () => void; children: React.ReactNode }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -100,23 +207,23 @@ function SwipeableRow({ onDismiss, children }: { onDismiss: () => void; children
         translateX.setValue(dx);
       },
       onPanResponderRelease: (_, g) => {
-        const threshold = SWIPE_DISMISS_THRESHOLD;
         const velocityLeft = g.vx < 0 ? -g.vx : 0;
         const shouldDismiss =
-          g.dx < -threshold || velocityLeft > VELOCITY_DISMISS_THRESHOLD;
+          g.dx < -SWIPE_DISMISS_THRESHOLD || velocityLeft > VELOCITY_DISMISS_THRESHOLD;
 
         if (shouldDismiss) {
-          Animated.timing(translateX, {
+          Animated.spring(translateX, {
             toValue: -screenWidth,
-            duration: 200,
             useNativeDriver: true,
+            speed: 28,
+            bounciness: 0,
           }).start(() => onDismiss());
         } else {
           Animated.spring(translateX, {
             toValue: 0,
             useNativeDriver: true,
-            tension: 280,
-            friction: 32,
+            tension: 300,
+            friction: 30,
           }).start();
         }
       },
@@ -126,27 +233,24 @@ function SwipeableRow({ onDismiss, children }: { onDismiss: () => void; children
   return (
     <View style={swipeStyles.wrapper}>
       <View style={swipeStyles.dismissAction}>
-        <TouchableOpacity style={swipeStyles.dismissButton} onPress={onDismiss} activeOpacity={0.8}>
-          <Ionicons name="trash-outline" size={22} color="#fff" />
-          <Text style={swipeStyles.dismissText}>Dismiss</Text>
-        </TouchableOpacity>
+        <Ionicons name="trash-outline" size={22} color="#fff" />
       </View>
-      <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
+      <Animated.View
+        style={[swipeStyles.foreground, { transform: [{ translateX }] }]}
+        {...panResponder.panHandlers}
+      >
         {children}
       </Animated.View>
     </View>
   );
 }
 
-type NotificationFilter = 'all' | 'tickets' | 'approvals';
-
-function filterNotifications(list: NotificationRow[], filter: NotificationFilter): NotificationRow[] {
-  if (filter === 'all') return list;
-  if (filter === 'tickets') return list.filter((n) => n.type === 'new_ticket' || n.type === 'ticket_assigned');
-  return list.filter((n) => n.type === 'user_approval');
-}
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export default function NotificationsScreen() {
+  // ---- State (all preserved) ----
   const [list, setList] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -154,12 +258,17 @@ export default function NotificationsScreen() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [relatedStatus, setRelatedStatus] = useState<RelatedStatusMap>({});
   const [relatedUserName, setRelatedUserName] = useState<RelatedUserMap>({});
-  const [filter, setFilter] = useState<NotificationFilter>('all');
+  const [filter, setFilter] = useState<NotificationFilter>('tickets');
   const [userRole, setUserRole] = useState<string | null>(null);
   const [ticketInfoMap, setTicketInfoMap] = useState<TicketInfoMap>({});
   const [commentDataMap, setCommentDataMap] = useState<Record<string, { ticket_id: string; message: string; author_name: string }>>({});
   const hasLoadedRef = useRef(false);
 
+  // UI-only state
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [denyingId, setDenyingId] = useState<string | null>(null);
+
+  // ---- Fonts ----
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
@@ -170,6 +279,7 @@ export default function NotificationsScreen() {
     return () => clearTimeout(t);
   }, []);
 
+  // ---- Data fetching (all preserved) ----
   const fetchNotifications = useCallback(async () => {
     setError(null);
     const { data: { session } } = await supabase.auth.getSession();
@@ -286,6 +396,8 @@ export default function NotificationsScreen() {
     setRefreshing(false);
   }, [fetchNotifications]);
 
+  // ---- Callbacks (all preserved) ----
+
   const markAsRead = useCallback(async (notificationId: string) => {
     await supabase
       .from('notifications')
@@ -338,12 +450,45 @@ export default function NotificationsScreen() {
     [markAsRead, fetchNotifications]
   );
 
+  const handleDenyUser = useCallback(
+    async (profileId: string, notificationId: string) => {
+      Alert.alert(
+        'Deny user',
+        'Are you sure you want to deny this user? They will not be able to sign in.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Deny',
+            style: 'destructive',
+            onPress: async () => {
+              setDenyingId(profileId);
+              const { error: updateError } = await supabase
+                .from('profiles')
+                .update({ status: 'denied' })
+                .eq('id', profileId);
+
+              setDenyingId(null);
+              if (updateError) {
+                Alert.alert('Error', updateError.message || 'Could not deny user.');
+                return;
+              }
+              setRelatedStatus((prev) => ({ ...prev, [profileId]: 'denied' }));
+              await markAsRead(notificationId);
+              fetchNotifications();
+            },
+          },
+        ]
+      );
+    },
+    [markAsRead, fetchNotifications]
+  );
+
   const openNotification = useCallback(
     async (item: NotificationRow) => {
       if (!item.read_at) await markAsRead(item.id);
 
       if (item.type === 'user_approval') {
-        // Show approve action in-place or in a detail view; we'll show Approve button in the row / modal
+        // Show approve action in-place; we'll show Approve/Deny buttons in the row
         return;
       }
       if (item.type === 'new_ticket' || item.type === 'ticket_assigned') {
@@ -358,12 +503,47 @@ export default function NotificationsScreen() {
     [markAsRead, commentDataMap]
   );
 
+  const markAllAsRead = useCallback(async () => {
+    setMenuVisible(false);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    const unreadIds = list.filter((n) => !n.read_at).map((n) => n.id);
+    if (unreadIds.length === 0) return;
+
+    // Optimistic update
+    setList((prev) =>
+      prev.map((n) => (n.read_at ? n : { ...n, read_at: new Date().toISOString() }))
+    );
+
+    await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('recipient_id', session.user.id)
+      .is('read_at', null);
+  }, [list]);
+
+  // ---- Filter guard ----
   useEffect(() => {
     if (userRole !== 'owner' && filter === 'approvals') {
-      setFilter('all');
+      setFilter('tickets');
     }
   }, [userRole]);
 
+  // ---- Derived data ----
+  const showApprovalsTab = userRole === 'owner';
+
+  const filteredList = useMemo(
+    () => filterNotifications(list, filter),
+    [list, filter]
+  );
+
+  const sections = useMemo(
+    () => groupByTimePeriod(filteredList),
+    [filteredList]
+  );
+
+  // ---- Font loading screen ----
   if (!fontsLoaded && !fontTimeout) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -375,28 +555,176 @@ export default function NotificationsScreen() {
     );
   }
 
-  const filteredList = filterNotifications(list, filter);
-  const showApprovalsFilter = userRole === 'owner';
+  // ---- Subtitle helper ----
+  const getSubtitle = (item: NotificationRow): string | null => {
+    return getNotificationSubtitle(item, ticketInfoMap, commentDataMap, relatedUserName);
+  };
 
+  // ---- Render notification row ----
+  const renderItem = ({ item }: { item: NotificationRow }) => {
+    const isUnread = !item.read_at;
+    const icon = getNotificationIcon(item.type);
+    const subtitle = getSubtitle(item);
+    const isTicketType = item.type === 'new_ticket' || item.type === 'ticket_assigned' || item.type === 'new_comment';
+    const isApproval = item.type === 'user_approval';
+    const isAlreadyApproved = isApproval && relatedStatus[item.related_id] === 'active';
+    const isAlreadyDenied = isApproval && relatedStatus[item.related_id] === 'denied';
+
+    const rowContent = (
+      <Pressable
+        style={styles.rowPressable}
+        onPress={() => openNotification(item)}
+        android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
+      >
+        <View style={styles.rowInner}>
+          {/* Left: icon circle */}
+          <View style={styles.iconContainer}>
+            <View style={[styles.iconCircle, { backgroundColor: icon.color + '22' }]}>
+              <Ionicons name={icon.name} size={18} color={icon.color} />
+            </View>
+            {isUnread && <View style={styles.unreadDot} />}
+          </View>
+
+          {/* Middle: text content */}
+          <View style={styles.rowBody}>
+            <Text style={styles.rowTitle} numberOfLines={2}>
+              {getNotificationTitle(item, ticketInfoMap, commentDataMap)}
+            </Text>
+            {subtitle && (
+              <Text style={styles.rowSubtitle} numberOfLines={2}>
+                {subtitle}
+              </Text>
+            )}
+
+            {/* Ticket link */}
+            {isTicketType && (
+              <View style={styles.viewTicketRow}>
+                <Text style={styles.viewTicketText}>View ticket</Text>
+                <Text style={styles.viewTicketArrow}> →</Text>
+              </View>
+            )}
+
+            {/* Approval actions */}
+            {isApproval && isAlreadyApproved && (
+              <Text style={styles.approvedText}>Approved</Text>
+            )}
+            {isApproval && isAlreadyDenied && (
+              <Text style={styles.deniedText}>Denied</Text>
+            )}
+            {isApproval && !isAlreadyApproved && !isAlreadyDenied && (
+              <View style={styles.approvalActions}>
+                <TouchableOpacity
+                  style={[styles.approveBtn, (approvingId === item.related_id || denyingId === item.related_id) && styles.btnDisabled]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    handleApproveUser(item.related_id, item.id);
+                  }}
+                  disabled={!!approvingId || !!denyingId}
+                  activeOpacity={0.7}
+                >
+                  {approvingId === item.related_id ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.approveBtnText}>Approve</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.denyBtn, (approvingId === item.related_id || denyingId === item.related_id) && styles.btnDisabled]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    handleDenyUser(item.related_id, item.id);
+                  }}
+                  disabled={!!approvingId || !!denyingId}
+                  activeOpacity={0.7}
+                >
+                  {denyingId === item.related_id ? (
+                    <ActivityIndicator size="small" color="#c0392b" />
+                  ) : (
+                    <Text style={styles.denyBtnText}>Deny</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Right: relative time */}
+          <Text style={styles.timeText}>{timeAgo(item.created_at)}</Text>
+        </View>
+        <View style={styles.rowDivider} />
+      </Pressable>
+    );
+
+    return (
+      <SwipeableRow key={item.id} onDismiss={() => dismissNotification(item.id)}>
+        {rowContent}
+      </SwipeableRow>
+    );
+  };
+
+  // ---- Render section header ----
+  const renderSectionHeader = ({ section }: { section: SectionData }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionHeaderText}>{section.title}</Text>
+    </View>
+  );
+
+  // ---- Main render ----
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {/* Header */}
       <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.headerLeft}
+          onPress={() => router.back()}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
-        <View style={styles.filterRow}>
+        <TouchableOpacity
+          style={styles.headerRight}
+          onPress={() => setMenuVisible(true)}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="ellipsis-horizontal" size={22} color="#fff" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Tab bar (segmented control) */}
+      <View style={styles.tabBarContainer}>
+        <View style={styles.tabBar}>
           <TouchableOpacity
-            style={[styles.filterButton, filter === 'tickets' && styles.filterButtonActive]}
-            onPress={() => setFilter((f) => (f === 'tickets' ? 'all' : 'tickets'))}
+            style={[
+              styles.tabButton,
+              filter !== 'approvals' ? styles.tabButtonActive : styles.tabButtonInactive,
+            ]}
+            onPress={() => setFilter('tickets')}
+            activeOpacity={0.7}
           >
-            <Text style={[styles.filterButtonText, filter === 'tickets' && styles.filterButtonTextActive]}>
+            <Text
+              style={[
+                styles.tabButtonText,
+                filter !== 'approvals' ? styles.tabButtonTextActive : styles.tabButtonTextInactive,
+              ]}
+            >
               Tickets
             </Text>
           </TouchableOpacity>
-          {showApprovalsFilter && (
+          {showApprovalsTab && (
             <TouchableOpacity
-              style={[styles.filterButton, filter === 'approvals' && styles.filterButtonActive]}
-              onPress={() => setFilter((f) => (f === 'approvals' ? 'all' : 'approvals'))}
+              style={[
+                styles.tabButton,
+                filter === 'approvals' ? styles.tabButtonActive : styles.tabButtonInactive,
+              ]}
+              onPress={() => setFilter('approvals')}
+              activeOpacity={0.7}
             >
-              <Text style={[styles.filterButtonText, filter === 'approvals' && styles.filterButtonTextActive]}>
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  filter === 'approvals' ? styles.tabButtonTextActive : styles.tabButtonTextInactive,
+                ]}
+              >
                 Approvals
               </Text>
             </TouchableOpacity>
@@ -404,6 +732,7 @@ export default function NotificationsScreen() {
         </View>
       </View>
 
+      {/* Content */}
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#f2681c" />
@@ -437,142 +766,271 @@ export default function NotificationsScreen() {
           <Text style={styles.emptySubtitle}>Try another filter.</Text>
         </View>
       ) : (
-        <FlatList
-          data={filteredList}
+        <SectionList
+          sections={sections}
           keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          renderSectionHeader={renderSectionHeader}
           contentContainerStyle={styles.listContent}
+          stickySectionHeadersEnabled={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f2681c" />
           }
-          renderItem={({ item }) => {
-            const isUnread = !item.read_at;
-            const rowContent = (
-              <View style={[styles.row, isUnread && styles.rowUnread]}>
-                <TouchableOpacity
-                  style={styles.rowTouchable}
-                  onPress={() => openNotification(item)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.rowDot, isUnread && styles.rowDotUnread]} />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>{getNotificationTitle(item, ticketInfoMap, commentDataMap)}</Text>
-                    {item.type === 'user_approval' && (
-                      <Text style={styles.rowSubTitle}>
-                        User: {relatedUserName[item.related_id] ?? 'Loading...'}
-                      </Text>
-                    )}
-                    {item.type === 'new_comment' && (
-                      <Text style={styles.rowSubTitle} numberOfLines={2}>
-                        {commentDataMap[item.related_id]?.author_name ? `${commentDataMap[item.related_id].author_name}: ` : ''}
-                        {commentDataMap[item.related_id]?.message ?? 'Loading...'}
-                      </Text>
-                    )}
-                    <Text style={styles.rowDate}>
-                      {new Date(item.created_at).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </Text>
-                    {item.type === 'user_approval' && (
-                      relatedStatus[item.related_id] === 'active' ? (
-                        <View style={styles.approvedBadge}>
-                          <Ionicons name="checkmark-circle" size={20} color="#6a6" />
-                          <Text style={styles.approvedBadgeText}>User approved</Text>
-                        </View>
-                      ) : (
-                        <TouchableOpacity
-                          style={[styles.approveButton, approvingId === item.related_id && styles.approveButtonDisabled]}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            handleApproveUser(item.related_id, item.id);
-                          }}
-                          disabled={!!approvingId}
-                        >
-                          {approvingId === item.related_id ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <>
-                              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                              <Text style={styles.approveButtonText}>Approve user</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      )
-                    )}
-                    {(item.type === 'new_ticket' || item.type === 'ticket_assigned' || item.type === 'new_comment') && (
-                      <View style={styles.viewTicketButton}>
-                        <Text style={styles.viewTicketButtonText}>View ticket</Text>
-                        <Ionicons name="chevron-forward" size={18} color="#f2681c" />
-                      </View>
-                    )}
-                  </View>
-                  {isUnread && (
-                    <TouchableOpacity
-                      style={styles.markReadIconButton}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        markAsRead(item.id);
-                      }}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    >
-                      <Ionicons name="checkmark-done-outline" size={22} color="#999" />
-                    </TouchableOpacity>
-                  )}
-                </TouchableOpacity>
-              </View>
-            );
-            return (
-              <SwipeableRow key={item.id} onDismiss={() => dismissNotification(item.id)}>
-                {rowContent}
-              </SwipeableRow>
-            );
-          }}
         />
       )}
+
+      {/* Three-dot menu modal */}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setMenuVisible(false)}>
+          <View style={styles.menuContainer}>
+            <TouchableOpacity style={styles.menuItem} onPress={markAllAsRead} activeOpacity={0.7}>
+              <Ionicons name="checkmark-done-outline" size={20} color="#fff" style={{ marginRight: 12 }} />
+              <Text style={styles.menuItemText}>Mark all as read</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
+
+  // Header
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#4a4a4a',
+    borderBottomColor: '#444',
+  },
+  headerLeft: {
+    width: 36,
+    alignItems: 'flex-start',
   },
   headerTitle: {
-    fontSize: 22,
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
     color: '#fff',
   },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 12,
+  headerRight: {
+    width: 36,
+    alignItems: 'flex-end',
   },
-  filterButton: {
-    paddingVertical: 8,
+
+  // Tab bar (segmented control)
+  tabBarContainer: {
+    alignItems: 'center',
     paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: '#4a4a4a',
+    paddingBottom: 12,
   },
-  filterButtonActive: {
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#3a3a3a',
+    borderRadius: 24,
+    padding: 3,
+  },
+  tabButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 24,
+    borderRadius: 21,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  tabButtonActive: {
     backgroundColor: '#f2681c',
   },
-  filterButtonText: {
+  tabButtonInactive: {
+    backgroundColor: 'transparent',
+  },
+  tabButtonText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: '#999',
   },
-  filterButtonTextActive: {
+  tabButtonTextActive: {
     color: '#fff',
   },
+  tabButtonTextInactive: {
+    color: '#999',
+  },
+
+  // Section headers
+  sectionHeader: {
+    marginTop: 20,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  sectionHeaderText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+
+  // List
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 32,
+  },
+
+  // Notification row
+  rowPressable: {
+    backgroundColor: '#2e2e2e',
+  },
+  rowInner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+  },
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#444',
+    marginLeft: 52,
+  },
+
+  // Icon
+  iconContainer: {
+    width: 36,
+    height: 36,
+    marginRight: 12,
+  },
+  iconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadDot: {
+    position: 'absolute',
+    top: -1,
+    right: -1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#e74c3c',
+    borderWidth: 1.5,
+    borderColor: '#2e2e2e',
+  },
+
+  // Body
+  rowBody: {
+    flex: 1,
+    marginRight: 8,
+  },
+  rowTitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+    lineHeight: 20,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#999',
+    marginTop: 3,
+    lineHeight: 18,
+  },
+
+  // Time
+  timeText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#777',
+    marginTop: 2,
+    minWidth: 48,
+    textAlign: 'right',
+  },
+
+  // View ticket link
+  viewTicketRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  viewTicketText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#f2681c',
+  },
+  viewTicketArrow: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#f2681c',
+  },
+
+  // Approval actions
+  approvalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  approveBtn: {
+    backgroundColor: '#f2681c',
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+    minHeight: 34,
+  },
+  approveBtnText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  denyBtn: {
+    borderWidth: 1,
+    borderColor: '#c0392b',
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+    minHeight: 34,
+  },
+  denyBtnText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#c0392b',
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  approvedText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#6fcf7a',
+    marginTop: 8,
+  },
+  deniedText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#c0392b',
+    marginTop: 8,
+  },
+
+  // Empty / error states
   centered: {
     flex: 1,
     justifyContent: 'center',
@@ -604,113 +1062,42 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     color: '#fff',
   },
-  listContent: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  row: {
-    backgroundColor: '#4a4a4a',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  rowUnread: {
-    backgroundColor: '#4f4a45',
-    borderLeftWidth: 3,
-    borderLeftColor: '#f2681c',
-  },
-  rowTouchable: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    padding: 14,
-    minHeight: 56,
-  },
-  rowDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: 'transparent',
-    marginRight: 12,
-    marginTop: 6,
-  },
-  rowDotUnread: {
-    backgroundColor: '#f2681c',
-  },
-  rowBody: {
+
+  // Menu modal
+  modalOverlay: {
     flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: 100,
+    paddingRight: 16,
   },
-  rowTitle: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
+  menuContainer: {
+    backgroundColor: '#3a3a3a',
+    borderRadius: 12,
+    paddingVertical: 6,
+    minWidth: 200,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  rowDate: {
-    fontSize: 12,
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  menuItemText: {
+    fontSize: 15,
     fontFamily: 'Inter_400Regular',
-    color: '#999',
-    marginTop: 4,
-  },
-  rowSubTitle: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#bbb',
-    marginTop: 4,
-  },
-  approveButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: '#f2681c',
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-  },
-  approveButtonDisabled: {
-    opacity: 0.7,
-  },
-  approveButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
     color: '#fff',
-  },
-  approvedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    alignSelf: 'flex-start',
-  },
-  approvedBadgeText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#6a6',
-  },
-  viewTicketButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 10,
-  },
-  viewTicketButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#f2681c',
-  },
-  markReadIconButton: {
-    padding: 8,
-    marginLeft: 4,
-    justifyContent: 'center',
-    alignSelf: 'center',
   },
 });
 
 const swipeStyles = StyleSheet.create({
   wrapper: {
-    marginBottom: 10,
-    borderRadius: 8,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -724,16 +1111,7 @@ const swipeStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  dismissButton: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  dismissText: {
-    color: '#fff',
-    fontSize: 12,
-    fontFamily: 'Inter_600SemiBold',
-    marginTop: 3,
+  foreground: {
+    backgroundColor: '#2e2e2e',
   },
 });

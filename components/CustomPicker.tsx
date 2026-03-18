@@ -194,7 +194,7 @@ const styles = StyleSheet.create({
   },
   // The white content box in the modal
   modalContent: {
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '70%', // Don't take up more than 70% of screen

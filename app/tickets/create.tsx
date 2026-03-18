@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-font
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { CustomPicker } from '../../components/CustomPicker';
 import { supabase } from '../../lib/supabase/client';
 import { uploadTicketPhoto } from '../../lib/services/tickets';
@@ -31,6 +32,7 @@ const BUILDING_OPTIONS = [
   { label: 'Electrical', value: 'electrical' },
   { label: 'Plumbing', value: 'plumbing' },
   { label: 'HVAC', value: 'hvac' },
+  { label: 'Finish Carpentry', value: 'finish_carpentry' },
   { label: 'Countertops', value: 'countertops' },
   { label: 'Flooring', value: 'flooring' },
   { label: 'Painting', value: 'painting' },
@@ -87,12 +89,15 @@ export default function CreateTicketScreen() {
   const unitName = params.unitName ?? 'Unit';
   const [createGuideVisible, setCreateGuideVisible] = useState(params.demoCreate === '1');
 
+  const [title, setTitle] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [buildingElements, setBuildingElements] = useState<BuildingElement[]>([]);
   const [buildingElementModalVisible, setBuildingElementModalVisible] = useState(false);
   const [locationScope, setLocationScope] = useState<LocationScope | ''>('');
   const [floorLevel, setFloorLevel] = useState<FloorLevel | ''>('');
   const [priority, setPriority] = useState<Priority | ''>('medium');
+  const [dueDate, setDueDate] = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -108,6 +113,8 @@ export default function CreateTicketScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
   const handleRetakePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -120,7 +127,7 @@ export default function CreateTicketScreen() {
       allowsEditing: false,
     });
     if (!result.canceled && result.assets[0]) {
-      setPhotos([result.assets[0].uri]);
+      setPhotos((prev) => [...prev, result.assets[0].uri]);
     }
   };
 
@@ -199,16 +206,16 @@ export default function CreateTicketScreen() {
 
   const handleSubmit = async () => {
     setError('');
+    if (!title.trim()) {
+      setError('Please enter a ticket title.');
+      return;
+    }
     if (buildingElements.length === 0) {
       setError('Please select at least one building element.');
       return;
     }
     if (!locationScope) {
       setError('Please select Interior or Exterior.');
-      return;
-    }
-    if (!floorLevel) {
-      setError('Please select a floor.');
       return;
     }
     if (!unitId) {
@@ -237,6 +244,7 @@ export default function CreateTicketScreen() {
       const { data: insertedTicket, error: insertError } = await supabase
         .from('tickets')
         .insert({
+          title: title.trim(),
           unit_id: unitId,
           created_by: user.id,
           photo_url: photoUrls[0] ?? null,
@@ -244,8 +252,9 @@ export default function CreateTicketScreen() {
           building_element: buildingElements[0],
           building_elements: buildingElements,
           location_scope: locationScope,
-          floor_level: floorLevel,
+          floor_level: floorLevel || null,
           priority: priority || 'medium',
+          due_date: dueDate ? dueDate.toISOString().split('T')[0] : null,
           notes: notes.trim() || null,
           status: 'open',
         })
@@ -309,7 +318,7 @@ export default function CreateTicketScreen() {
     }
   };
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) return null;
 
   const missingParams = !unitId;
   if (missingParams) {
@@ -356,7 +365,18 @@ export default function CreateTicketScreen() {
         >
           <Text style={styles.unitLabel}>{unitName}</Text>
 
-          <Text style={styles.fieldLabel}>Photos</Text>
+          <Text style={styles.fieldLabel}>Title</Text>
+          <TextInput
+            style={[styles.titleInput, !!error && !title.trim() && { borderColor: '#f2681c', borderWidth: 1 }]}
+            value={title}
+            onChangeText={setTitle}
+            placeholder="e.g. Electrical — basement wiring"
+            placeholderTextColor="#888"
+            maxLength={120}
+          />
+
+          <Text style={styles.fieldLabel}>Photos{photos.length > 0 ? ` (${photos.length})` : ''}</Text>
+          <Text style={styles.photoHint}>Add multiple photos from camera or library</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -428,13 +448,12 @@ export default function CreateTicketScreen() {
             hasError={!!error && !locationScope}
           />
 
-          <Text style={styles.fieldLabel}>Floor</Text>
+          <Text style={styles.fieldLabel}>Floor (optional)</Text>
           <CustomPicker<FloorLevel>
             selectedValue={floorLevel}
             onValueChange={setFloorLevel}
             items={FLOOR_LEVEL_OPTIONS}
             placeholder="Select floor"
-            hasError={!!error && !floorLevel}
           />
 
           <Text style={styles.fieldLabel}>Priority</Text>
@@ -444,6 +463,42 @@ export default function CreateTicketScreen() {
             items={PRIORITY_OPTIONS}
             placeholder="Select priority"
           />
+
+          <Text style={styles.fieldLabel}>Due Date (optional)</Text>
+          <TouchableOpacity
+            style={styles.notifyButton}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Ionicons name="calendar-outline" size={20} color="#fff" />
+            <Text style={styles.notifyButtonText}>
+              {dueDate
+                ? dueDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+                : 'Set a deadline'}
+            </Text>
+            {dueDate ? (
+              <TouchableOpacity
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                onPress={() => setDueDate(null)}
+              >
+                <Ionicons name="close-circle" size={20} color="#999" />
+              </TouchableOpacity>
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color="#999" />
+            )}
+          </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={dueDate ?? new Date()}
+              mode="date"
+              display="inline"
+              minimumDate={new Date()}
+              themeVariant="dark"
+              onChange={(_event: any, selectedDate?: Date) => {
+                setShowDatePicker(Platform.OS === 'ios');
+                if (selectedDate) setDueDate(selectedDate);
+              }}
+            />
+          )}
 
           <Text style={styles.fieldLabel}>Notes (optional)</Text>
           <TextInput
@@ -633,7 +688,7 @@ export default function CreateTicketScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   header: {
     flexDirection: 'row',
@@ -668,11 +723,27 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
+  titleInput: {
+    backgroundColor: '#4a4a4a',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+    marginBottom: 16,
+  },
   unitLabel: {
     fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
     color: '#fff',
     marginBottom: 12,
+  },
+  photoHint: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#777',
+    marginBottom: 4,
+    marginTop: -4,
   },
   photosScroll: {
     marginBottom: 8,
@@ -835,7 +906,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   notifyModalContent: {
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '70%',
@@ -927,7 +998,7 @@ const styles = StyleSheet.create({
   },
   demoCreateModal: {
     width: '88%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderWidth: 1,
     borderColor: '#4a4a4a',
     borderRadius: 14,

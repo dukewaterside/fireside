@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   hint: {
     color: '#999',

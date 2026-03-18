@@ -126,7 +126,7 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#3b3b3b' },
+  safeArea: { flex: 1, backgroundColor: '#2e2e2e' },
   localImage: {
     width: 280,
     height: 64,
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     padding: 20,
   },
   inner: {

@@ -30,7 +30,7 @@ export default function PendingApprovalScreen() {
 
   if (!fontsLoaded && !fontTimeout) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, backgroundColor: '#2e2e2e', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#f2681c" />
       </View>
     );
@@ -60,7 +60,7 @@ export default function PendingApprovalScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   container: {
     flex: 1,

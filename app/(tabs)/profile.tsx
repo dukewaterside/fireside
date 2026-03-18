@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -89,6 +89,8 @@ export default function ProfileScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
   const fetchProfile = useCallback(async () => {
     setError(null);
@@ -270,7 +272,7 @@ export default function ProfileScreen() {
     );
   }, []);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) return null;
 
   if (loading && !profile) {
     return (
@@ -512,7 +514,7 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   header: {
     paddingHorizontal: 16,
@@ -669,7 +671,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   input: {
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,

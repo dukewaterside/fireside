@@ -81,7 +81,7 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#3b3b3b',
+          backgroundColor: '#2e2e2e',
           borderTopColor: '#4a4a4a',
           borderTopWidth: 1,
           height: 80,
@@ -155,5 +155,5 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  loadingRoot: { flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' },
+  loadingRoot: { flex: 1, backgroundColor: '#2e2e2e', justifyContent: 'center', alignItems: 'center' },
 });
