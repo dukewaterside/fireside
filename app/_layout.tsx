@@ -36,27 +36,12 @@ export default function RootLayout() {
     const handleSession = async (session: any) => {
       if (!isMounted || !session) return;
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('status')
-        .eq('id', session.user.id)
-        .maybeSingle();
-
+      const completed = await hasCompletedOnboarding(session.user.id);
       if (!isMounted) return;
-      const status = profile?.status ?? 'active';
       const firstSegment = getFirstSegment();
-
-      if (status === 'pending' && firstSegment !== 'pending-approval') {
-        router.replace('/pending-approval');
-      } else if (status === 'denied' && firstSegment !== 'pending-approval') {
-        router.replace('/pending-approval?status=denied');
-      } else if (status === 'active') {
-        const completed = await hasCompletedOnboarding(session.user.id);
-        if (!isMounted) return;
-        // Only navigate to tabs from auth/entry screens; don't disrupt active screens.
-        if (firstSegment === '/' || firstSegment === 'sign-in' || firstSegment === 'onboarding') {
-          router.replace(completed ? '/(tabs)' : '/onboarding');
-        }
+      // Only navigate to tabs from auth/entry screens; don't disrupt active screens.
+      if (firstSegment === '/' || firstSegment === 'sign-in' || firstSegment === 'onboarding') {
+        router.replace(completed ? '/(tabs)' : '/onboarding');
       }
     };
 

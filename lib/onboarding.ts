@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const ONBOARDING_VERSION = 'v4';
+const ONBOARDING_VERSION = 'v5';
 
 function completedKey(userId: string): string {
   return `onboarding_completed:${ONBOARDING_VERSION}:${userId}`;

@@ -36,15 +36,6 @@ type ProfileData = {
   status: string | null;
 };
 
-type PendingUser = {
-  id: string;
-  email: string | null;
-  first_name: string | null;
-  last_name: string | null;
-  role: string | null;
-  trade: string | null;
-};
-
 const TRADE_LABELS: Record<string, string> = {
   framing: 'Framing',
   electrical: 'Electrical',
@@ -80,10 +71,6 @@ export default function ProfileScreen() {
   const [editPhone, setEditPhone] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-
-  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
-  const [denyingId, setDenyingId] = useState<string | null>(null);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -121,25 +108,6 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  const fetchPendingUsers = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) {
-      setPendingUsers([]);
-      return;
-    }
-    const { data, error: fetchErr } = await supabase
-      .from('profiles')
-      .select('id, email, first_name, last_name, role, trade')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-
-    if (fetchErr) {
-      setPendingUsers([]);
-      return;
-    }
-    setPendingUsers((data as PendingUser[]) ?? []);
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
@@ -153,78 +121,11 @@ export default function ProfileScreen() {
     }, [fetchProfile])
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      if (profile?.role === 'owner') {
-        fetchPendingUsers();
-      } else {
-        setPendingUsers([]);
-      }
-    }, [profile?.role, fetchPendingUsers])
-  );
-
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchProfile();
-    if (profile?.role === 'owner') await fetchPendingUsers();
     setRefreshing(false);
-  }, [fetchProfile, profile?.role, fetchPendingUsers]);
-
-  const handleApproveUser = useCallback(
-    async (userId: string) => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setApprovingId(userId);
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({
-          status: 'active',
-          approved_by: user.id,
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', userId);
-
-      setApprovingId(null);
-      if (updateError) {
-        Alert.alert('Error', updateError.message || 'Could not approve user.');
-        return;
-      }
-      setPendingUsers((prev) => prev.filter((u) => u.id !== userId));
-      await fetchProfile();
-    },
-    [fetchProfile]
-  );
-
-  const handleDenyUser = useCallback(
-    async (userId: string) => {
-      Alert.alert(
-        'Deny user',
-        'Are you sure you want to deny this user? They will not be able to sign in.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Deny',
-            style: 'destructive',
-            onPress: async () => {
-              setDenyingId(userId);
-              const { error: updateError } = await supabase
-                .from('profiles')
-                .update({ status: 'denied' })
-                .eq('id', userId);
-
-              setDenyingId(null);
-              if (updateError) {
-                Alert.alert('Error', updateError.message || 'Could not deny user.');
-                return;
-              }
-              setPendingUsers((prev) => prev.filter((u) => u.id !== userId));
-            },
-          },
-        ]
-      );
-    },
-    []
-  );
+  }, [fetchProfile]);
 
   const handleSaveProfile = useCallback(async () => {
     if (!profile) return;
@@ -439,61 +340,6 @@ export default function ProfileScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-            </View>
-          )}
-
-          {profile.role === 'owner' && (
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Pending approvals</Text>
-              {pendingUsers.length === 0 ? (
-                <Text style={styles.pendingEmptyText}>No users waiting for approval.</Text>
-              ) : (
-                pendingUsers.map((u) => {
-                  const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || '—';
-                  const roleLabelVal = roleLabel(u.role);
-                  const isApproving = approvingId === u.id;
-                  const isDenying = denyingId === u.id;
-                  const busy = isApproving || isDenying;
-                  return (
-                    <View key={u.id} style={styles.pendingRow}>
-                      <View style={styles.pendingRowInfo}>
-                        <Text style={styles.pendingRowName}>{name}</Text>
-                        <Text style={styles.pendingRowMeta}>{roleLabelVal}{u.trade ? ` · ${TRADE_LABELS[u.trade] ?? u.trade}` : ''}</Text>
-                      </View>
-                      <View style={styles.pendingRowActions}>
-                        <TouchableOpacity
-                          style={[styles.pendingApproveBtn, busy && styles.pendingButtonDisabled]}
-                          onPress={() => handleApproveUser(u.id)}
-                          disabled={!!busy}
-                        >
-                          {isApproving ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <>
-                              <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                              <Text style={styles.pendingApproveBtnText}>Approve</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.pendingDenyBtn, busy && styles.pendingButtonDisabled]}
-                          onPress={() => handleDenyUser(u.id)}
-                          disabled={!!busy}
-                        >
-                          {isDenying ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <>
-                              <Ionicons name="close-circle-outline" size={18} color="#fff" />
-                              <Text style={styles.pendingDenyBtnText}>Deny</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
             </View>
           )}
 
@@ -741,68 +587,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     color: '#f2681c',
-  },
-  pendingEmptyText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
-  },
-  pendingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#555',
-    gap: 12,
-  },
-  pendingRowInfo: {
-    flex: 1,
-  },
-  pendingRowName: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  pendingRowMeta: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
-    marginTop: 2,
-  },
-  pendingRowActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  pendingApproveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: '#22c55e',
-    borderRadius: 8,
-  },
-  pendingApproveBtnText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  pendingDenyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: '#dc2626',
-    borderRadius: 8,
-  },
-  pendingDenyBtnText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  pendingButtonDisabled: {
-    opacity: 0.6,
   },
 });

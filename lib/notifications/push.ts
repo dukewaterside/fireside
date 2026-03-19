@@ -112,7 +112,7 @@ export async function registerAndSavePushToken(): Promise<void> {
 
 /** Notification payload we attach when sending (type, related_id for deep link) */
 export type NotificationData = {
-  type?: 'user_approval' | 'new_ticket' | 'ticket_assigned' | 'new_comment';
+  type?: 'new_ticket' | 'ticket_assigned' | 'new_comment';
   related_id?: string;
 };
 
@@ -129,8 +129,6 @@ export function setNotificationResponseHandler(): () => void {
       } else {
         router.push('/tickets');
       }
-    } else if (data.type === 'user_approval') {
-      router.push('/(tabs)/notifications');
     } else {
       router.push('/(tabs)/notifications');
     }

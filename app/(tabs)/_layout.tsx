@@ -33,24 +33,7 @@ export default function TabsLayout() {
             return; // No redirect: tabs stay visible with sign-in prompts
           }
 
-          // Redirect pending/denied users to approval screen (e.g. reopened app after status change)
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('status')
-            .eq('id', session.user.id)
-            .maybeSingle();
-          const status = profile?.status ?? 'active';
-          if (mounted && status === 'pending') {
-            router.replace('/pending-approval');
-            return;
-          }
-          if (mounted && status === 'denied') {
-            router.replace('/pending-approval?status=denied');
-            return;
-          }
-          if (mounted && status === 'active') {
-            registerAndSavePushToken().catch(() => {});
-          }
+          registerAndSavePushToken().catch(() => {});
 
           // Only count this user's unread notifications (avoid large-table counts)
           const { count, error } = await supabase
