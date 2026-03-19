@@ -1,61 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Image, View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { Image, View, Text, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import * as Linking from 'expo-linking';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { LogginButton } from '../components/LogginButton';
-import { signIn, resetPasswordForEmail } from '../lib/services/auth';
-import { supabase } from '../lib/supabase/client';
-import { hasCompletedOnboarding } from '../lib/onboarding';
+import { signIn } from '../lib/services/auth';
 import { registerAndSavePushToken } from '../lib/notifications/push';
 
 export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [error, setError] = useState('');
 
-  const PROFILE_STATUS_RETRY_COUNT = 6;
-  const PROFILE_STATUS_RETRY_DELAY_MS = 500;
   const SIGN_IN_RETRY_DELAY_MS = 1200;
 
   useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!isMounted || !session) return;
-        const status = await fetchProfileStatusWithRetry(session.user.id);
-        if (status === 'pending') router.replace('/pending-approval');
-        else if (status === 'denied') router.replace('/pending-approval?status=denied');
-        else router.replace('/(tabs)');
-      } catch {
-        // Ignore; stay on sign-in
-      }
-    })();
-    return () => { isMounted = false; };
+    // _layout.tsx handles routing via onAuthStateChange (INITIAL_SESSION event).
+    // Nothing to do here on mount.
   }, []);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
-
-  const fetchProfileStatusWithRetry = async (userId: string): Promise<'pending' | 'active' | 'denied'> => {
-    for (let attempt = 0; attempt < PROFILE_STATUS_RETRY_COUNT; attempt++) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('status')
-        .eq('id', userId)
-        .maybeSingle();
-      const status = (data as { status?: 'pending' | 'active' | 'denied' } | null)?.status;
-      if (status) return status;
-      await new Promise((resolve) => setTimeout(resolve, PROFILE_STATUS_RETRY_DELAY_MS));
-    }
-    return 'active';
-  };
 
   const handleSignIn = async () => {
     setError('');
@@ -68,6 +35,15 @@ export default function SignInScreen() {
       return;
     }
     setIsLoading(true);
+
+    // Safety net: reset loading after 20s if _layout.tsx never navigates away.
+    const loadingTimeout = setTimeout(() => setIsLoading(false), 20_000);
+
+    const stopLoading = () => {
+      clearTimeout(loadingTimeout);
+      setIsLoading(false);
+    };
+
     try {
       const emailNormalized = email.trim().toLowerCase();
       let response = await signIn(emailNormalized, password);
@@ -83,60 +59,25 @@ export default function SignInScreen() {
           response = await signIn(emailNormalized, password);
         }
       }
-      if (response && !response.success) {
+      if (!response.success) {
         setError(response.error || 'Failed to sign in');
+        stopLoading();
         return;
       }
       if (!response?.user) {
         setError('Could not finish sign-in. Please try again.');
+        stopLoading();
         return;
       }
 
-      const profileStatus = await fetchProfileStatusWithRetry(response.user.id);
-      if (profileStatus === 'pending') {
-        router.replace('/pending-approval');
-        return;
-      }
-      if (profileStatus === 'denied') {
-        const { signOut } = await import('../lib/services/auth');
-        await signOut();
-        setError('Your account was denied access. Please contact an owner.');
-        return;
-      }
+      // Sign-in succeeded. _layout.tsx's onAuthStateChange(SIGNED_IN) will fire
+      // and handle routing (to tabs, onboarding, or pending-approval). We stay
+      // in the loading state while that navigation happens — the 20s timeout
+      // above is the safety net if something unexpected prevents it.
       registerAndSavePushToken().catch(() => {});
-      const completed = await hasCompletedOnboarding(response.user.id);
-      router.replace(completed ? '/(tabs)' : '/onboarding');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async () => {
-    setError('');
-    const emailToUse = email.trim().toLowerCase();
-    if (!emailToUse) {
-      setError('Enter your email above, then tap Forgot Password.');
-      return;
-    }
-    setIsResettingPassword(true);
-    try {
-      const redirectTo = Linking.createURL('reset-password');
-      const response = await resetPasswordForEmail(emailToUse, { redirectTo });
-      if (response.success) {
-        Alert.alert(
-          'Check your email',
-          'If an account exists for that email, we sent a code. Enter it on the next screen to set a new password.',
-          [{ text: 'OK', onPress: () => router.push(`/reset-password?email=${encodeURIComponent(emailToUse)}`) }]
-        );
-      } else {
-        setError(response.error || 'Something went wrong. Try again later.');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-    } finally {
-      setIsResettingPassword(false);
+      stopLoading();
     }
   };
 
@@ -173,23 +114,10 @@ export default function SignInScreen() {
               <Text style={styles.errorText}>{error}</Text>
             </View>
           ) : null}
-          <TouchableOpacity
-            style={styles.forgotPassword}
-            onPress={handleForgotPassword}
-            disabled={isResettingPassword}
-          >
-            <Text style={styles.forgotPasswordText}>
-              {isResettingPassword ? 'Sending…' : 'Forgot Password?'}
-            </Text>
-          </TouchableOpacity>
           <LogginButton
             label={isLoading ? 'Signing In...' : 'Sign In'}
             onPress={handleSignIn}
             backgroundColor={isLoading ? '#999' : '#f2681c'}
-          />
-          <LogginButton
-            label="Create New Account"
-            onPress={() => router.push('/create-account')}
           />
         </View>
       </ScrollView>
@@ -198,7 +126,7 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#3b3b3b' },
+  safeArea: { flex: 1, backgroundColor: '#2e2e2e' },
   localImage: {
     width: 280,
     height: 64,
@@ -208,7 +136,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     padding: 20,
   },
   inner: {
@@ -228,8 +156,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     backgroundColor: '#4a4a4a',
   },
-  forgotPassword: { alignSelf: 'flex-end', marginBottom: 20, marginTop: -10 },
-  forgotPasswordText: { color: '#f2681c', fontSize: 14, fontFamily: 'Inter_400Regular' },
   errorContainer: { width: '100%', backgroundColor: '#ff4444', padding: 12, borderRadius: 8, marginBottom: 20 },
   errorText: { color: 'white', fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center' },
 });

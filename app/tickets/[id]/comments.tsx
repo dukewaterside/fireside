@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -48,6 +48,8 @@ export default function TicketCommentsScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
   const fetchComments = useCallback(async () => {
     if (!id) return;
@@ -124,7 +126,7 @@ export default function TicketCommentsScreen() {
     await fetchComments();
   }, [id, message, fetchComments]);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontTimeout) return null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -223,7 +225,7 @@ export default function TicketCommentsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#3b3b3b' },
+  container: { flex: 1, backgroundColor: '#2e2e2e' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -290,7 +292,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderTopWidth: 1,
     borderTopColor: '#4a4a4a',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   input: {
     flex: 1,

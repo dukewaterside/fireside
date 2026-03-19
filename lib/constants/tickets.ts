@@ -9,6 +9,7 @@ export const TRADE_LABELS: Record<string, string> = {
   plumbing: 'Plumbing',
   hvac: 'HVAC',
   av: 'AV',
+  it: 'IT',
   blueboard_plaster: 'Blueboard / Plaster',
   garage_doors: 'Garage Doors',
   tile: 'Tile',

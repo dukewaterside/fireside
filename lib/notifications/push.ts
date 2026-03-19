@@ -74,6 +74,7 @@ export async function savePushTokenToProfile(token: string): Promise<boolean> {
 
 /**
  * Register for push and save token. Call once when user is signed in (e.g. on tabs focus).
+ * Retries save once if it fails (e.g. session not ready). In __DEV__, logs when token or save fails.
  */
 export async function registerAndSavePushToken(): Promise<void> {
   try {
@@ -83,15 +84,35 @@ export async function registerAndSavePushToken(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 700));
       token = await registerForPushNotificationsAsync();
     }
-    if (token) await savePushTokenToProfile(token);
-  } catch {
-    // Swallow registration errors; app should continue even if push setup fails.
+    if (!token) {
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.warn('[Push] No Expo push token: permission may be denied or not yet requested.');
+      }
+      return;
+    }
+    let saved = await savePushTokenToProfile(token);
+    if (!saved) {
+      // Session might not be ready yet (e.g. right after sign-in). Retry once.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      saved = await savePushTokenToProfile(token);
+    }
+    if (!saved && __DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[Push] Failed to save token to profile. Check RLS allows profiles.expo_push_token update for current user.');
+    }
+  } catch (err) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[Push] Registration error:', err);
+    }
+    // Swallow in production so app continues even if push setup fails.
   }
 }
 
 /** Notification payload we attach when sending (type, related_id for deep link) */
 export type NotificationData = {
-  type?: 'user_approval' | 'new_ticket' | 'ticket_assigned';
+  type?: 'new_ticket' | 'ticket_assigned' | 'new_comment';
   related_id?: string;
 };
 
@@ -102,14 +123,12 @@ export type NotificationData = {
 export function setNotificationResponseHandler(): () => void {
   const sub = Notifications.addNotificationResponseReceivedListener((response) => {
     const data = response.notification.request.content.data as NotificationData;
-    if (data.type === 'new_ticket' || data.type === 'ticket_assigned') {
+    if (data.type === 'new_ticket' || data.type === 'ticket_assigned' || data.type === 'new_comment') {
       if (data.related_id) {
         router.push({ pathname: '/tickets/[id]', params: { id: data.related_id } });
       } else {
         router.push('/tickets');
       }
-    } else if (data.type === 'user_approval') {
-      router.push('/(tabs)/notifications');
     } else {
       router.push('/(tabs)/notifications');
     }

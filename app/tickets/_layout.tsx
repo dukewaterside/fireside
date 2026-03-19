@@ -5,7 +5,7 @@ export default function TicketsLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: '#3b3b3b' },
+        contentStyle: { backgroundColor: '#2e2e2e' },
       }}
     />
   );

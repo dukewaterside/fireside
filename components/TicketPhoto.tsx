@@ -59,7 +59,7 @@ export function TicketPhoto({
 
 const styles = StyleSheet.create({
   placeholder: {
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     justifyContent: 'center',
     alignItems: 'center',
   },

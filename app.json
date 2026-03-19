@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#3b3b3b"
+      "backgroundColor": "#2e2e2e"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -26,11 +26,11 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#3b3b3b"
+        "backgroundColor": "#2e2e2e"
       },
       "package": "com.fireside.southpeak",
       "navigationBar": {
-        "backgroundColor": "#3b3b3b"
+        "backgroundColor": "#2e2e2e"
       },
       "permissions": [
         "CAMERA",
@@ -58,7 +58,8 @@
           "color": "#ffffff"
         }
       ],
-      "expo-font"
+      "expo-font",
+      "@react-native-community/datetimepicker"
     ],
     "scheme": "fireside",
     "extra": {
@@ -71,4 +72,3 @@
     }
   }
 }
-

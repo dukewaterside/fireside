@@ -28,25 +28,6 @@ export default function Index() {
           router.replace('/sign-in');
           return;
         }
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('status')
-          .eq('id', session.user.id)
-          .maybeSingle();
-        if (!isMounted) return;
-        const status = profile?.status ?? 'active';
-        if (status === 'pending') {
-          setChecking(false);
-          clearTimeout(fallback);
-          router.replace('/pending-approval');
-          return;
-        }
-        if (status === 'denied') {
-          setChecking(false);
-          clearTimeout(fallback);
-          router.replace('/pending-approval?status=denied');
-          return;
-        }
         const completed = await hasCompletedOnboarding(session.user.id);
         if (!isMounted) return;
         setChecking(false);
@@ -82,7 +63,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   hint: {
     color: '#999',

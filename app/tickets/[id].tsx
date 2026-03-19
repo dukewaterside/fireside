@@ -27,7 +27,7 @@ import { TicketPhoto } from '../../components/TicketPhoto';
 import { formatPhoneNumberDisplay } from '../../lib/utils/phone';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const HERO_PHOTO_HEIGHT = 280;
+const HERO_PHOTO_HEIGHT = 260;
 const ZOOM_MODAL_PHOTO_HEIGHT = 400;
 
 type TicketDetail = {
@@ -42,7 +42,9 @@ type TicketDetail = {
   floor_level: 'basement' | '1st_floor' | '2nd_floor' | '3rd_floor' | null;
   priority: string | null;
   notes: string | null;
+  title: string | null;
   status: string | null;
+  due_date: string | null;
   completion_notes: string | null;
   completed_by: string | null;
   completed_at: string | null;
@@ -111,6 +113,7 @@ export default function TicketDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [statusModalVisible, setStatusModalVisible] = useState(false);
   const [zoomPhotoUri, setZoomPhotoUri] = useState<string | null>(null);
   const [zoomPhotoSignedUri, setZoomPhotoSignedUri] = useState<string | null>(null);
   const [zoomLoading, setZoomLoading] = useState(false);
@@ -121,11 +124,15 @@ export default function TicketDetailScreen() {
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [addingContactId, setAddingContactId] = useState<string | null>(null);
   const [canResolveTicket, setCanResolveTicket] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0);
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setFontTimeout(true), 5000); return () => clearTimeout(t); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +167,7 @@ export default function TicketDetailScreen() {
     }
     const { data: ticketData, error: fetchErr } = await supabase
       .from('tickets')
-      .select('id, unit_id, created_by, photo_url, photo_urls, building_element, building_elements, location_scope, floor_level, priority, notes, status, completion_notes, completed_by, completed_at, created_at, updated_at, units(unit_number)')
+      .select('id, unit_id, created_by, title, photo_url, photo_urls, building_element, building_elements, location_scope, floor_level, priority, notes, status, due_date, completion_notes, completed_by, completed_at, created_at, updated_at, units(unit_number)')
       .eq('id', id)
       .maybeSingle();
 
@@ -274,43 +281,62 @@ export default function TicketDetailScreen() {
     setRefreshing(false);
   }, [fetchTicket]);
 
-  const handleResolve = useCallback(async () => {
-    if (!ticket || ticket.status === 'completed') return;
+  const handleStatusChange = useCallback(async (newStatus: string) => {
+    if (!ticket) return;
     if (!canResolveTicket) {
-      setError('Only owners, designers, developers, and project managers can resolve tickets.');
+      setError('Only owners, designers, developers, and project managers can change ticket status.');
       return;
     }
     setError(null);
     setResolving(true);
+    setStatusModalVisible(false);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      setError('Sign in again to resolve this ticket.');
+      setError('Sign in again to change ticket status.');
       setResolving(false);
       return;
     }
+    const updatePayload: Record<string, unknown> = { status: newStatus };
+    if (newStatus === 'completed') {
+      updatePayload.completed_by = user.id;
+      updatePayload.completed_at = new Date().toISOString();
+    } else {
+      updatePayload.completed_by = null;
+      updatePayload.completed_at = null;
+    }
     const { data: updatedRows, error: updateErr } = await supabase
       .from('tickets')
-      .update({
-        status: 'completed',
-        completed_by: user.id,
-        completed_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', ticket.id)
       .select('id');
 
     if (updateErr) {
-      setError(updateErr.message || 'Could not resolve ticket.');
+      setError(updateErr.message || 'Could not update ticket status.');
       setResolving(false);
       return;
     }
     if (!updatedRows || updatedRows.length === 0) {
-      setError('You do not have permission to resolve this ticket.');
+      setError('You do not have permission to change this ticket.');
       setResolving(false);
       return;
     }
     await fetchTicket();
     setResolving(false);
   }, [ticket, fetchTicket, canResolveTicket]);
+
+  const handleDelete = useCallback(() => {
+    if (!ticket) return;
+    Alert.alert('Delete ticket', 'Are you sure? This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          const { error: delErr } = await supabase.from('tickets').delete().eq('id', ticket.id);
+          if (delErr) { Alert.alert('Error', delErr.message); return; }
+          router.replace('/tickets');
+        },
+      },
+    ]);
+  }, [ticket]);
 
   const photoUrls = ticket
     ? (ticket.photo_urls && ticket.photo_urls.length > 0 ? ticket.photo_urls : ticket.photo_url ? [ticket.photo_url] : [])
@@ -347,28 +373,54 @@ export default function TicketDetailScreen() {
     setTaggedModalVisible(true);
   }, [ticket?.id, fetchTicket]);
 
-  const buildingElementText = (
+  const buildingElements = (
     (ticket?.building_elements && ticket.building_elements.length > 0 ? ticket.building_elements : ticket ? [ticket.building_element] : [])
       .filter(Boolean)
-      .map((v) => BUILDING_LABELS[v] ?? v)
-      .join(', ')
   );
 
-  if (!fontsLoaded) return null;
+  // Title: use ticket.title if set, otherwise fall back to building elements + unit name
+  const ticketTitle = ticket?.title
+    || buildingElements.map((v) => BUILDING_LABELS[v] ?? v).join(', ')
+    || (ticket?.units as { unit_number: string } | null)?.unit_number
+    || 'Ticket';
+
+  const floorLabel = ticket?.floor_level === '1st_floor' ? '1st Floor'
+    : ticket?.floor_level === '2nd_floor' ? '2nd Floor'
+    : ticket?.floor_level === '3rd_floor' ? '3rd Floor'
+    : ticket?.floor_level === 'basement' ? 'Basement' : null;
+  const locationLabel = ticket?.location_scope === 'interior' ? 'Interior'
+    : ticket?.location_scope === 'exterior' ? 'Exterior' : null;
+  const tagChips = [
+    ...buildingElements.map((v) => ({ label: BUILDING_LABELS[v] ?? v, prefix: '+ ' })),
+    ...(locationLabel ? [{ label: locationLabel, prefix: '' }] : []),
+    ...(floorLabel ? [{ label: floorLabel, prefix: '' }] : []),
+  ];
+
+  const creatorName = creator ? ([creator.first_name, creator.last_name].filter(Boolean).join(' ') || creator.email || 'Unknown') : 'Unknown';
+  const getInitials = (name: string) => name.split(' ').map((w) => w[0]).filter(Boolean).join('').toUpperCase().slice(0, 2);
+
+  const statusText = ticket?.status === 'in_progress' ? 'In Progress' : ticket?.status === 'completed' ? 'Resolved' : 'Open';
+  const sColor = ticket?.status === 'in_progress' ? '#facc15' : ticket?.status === 'completed' ? '#9aa3af' : '#6fcf7a';
+  const priorityText = PRIORITY_LABELS[ticket?.priority ?? 'medium'] ?? 'Medium';
+  const pColor = ticket?.priority === 'high' ? '#f87171' : ticket?.priority === 'medium' ? '#d4a017' : '#6fcf7a';
+
+  const unitName = (ticket?.units as { unit_number: string } | null)?.unit_number ?? 'Unit';
+
+  if (!fontsLoaded && !fontTimeout) return null;
   if (!id) {
     return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+      <SafeAreaView style={st.container} edges={['top', 'bottom']}>
+        <View style={st.header}>
+          <TouchableOpacity style={st.headerSide} onPress={() => router.back()}>
+            <Ionicons name="chevron-back" size={26} color="#f2681c" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Ticket</Text>
-          <View style={styles.headerRight} />
+          <Text style={st.headerTitle}>Ticket</Text>
+          <View style={st.headerSide} />
         </View>
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>Missing ticket ID.</Text>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Text style={styles.backBtnText}>Back</Text>
+        <View style={st.centered}>
+          <Text style={{ color: '#f2681c', fontFamily: 'Inter_400Regular', fontSize: 14, marginBottom: 12 }}>Missing ticket ID.</Text>
+          <TouchableOpacity style={st.orangeBtn} onPress={() => router.back()}>
+            <Text style={st.orangeBtnLabel}>Back</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -376,345 +428,310 @@ export default function TicketDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+    <SafeAreaView style={st.container} edges={['top', 'bottom']}>
+      {/* ── Header ── */}
+      <View style={st.header}>
+        <TouchableOpacity style={st.headerSide} onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={26} color="#f2681c" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Ticket</Text>
-        <View style={styles.headerRight} />
+        <Text style={st.headerTitle}>Ticket</Text>
+        <TouchableOpacity style={st.headerSide} onPress={() => setMenuVisible(true)}>
+          <Ionicons name="ellipsis-horizontal" size={22} color="#999" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#f2681c" />
-        </View>
+        <View style={st.centered}><ActivityIndicator size="large" color="#f2681c" /></View>
       ) : error || !ticket ? (
-        <View style={styles.centered}>
+        <View style={st.centered}>
           <Ionicons name="alert-circle-outline" size={64} color="#f2681c" />
-          <Text style={styles.emptyTitle}>{error ?? 'Ticket not found'}</Text>
-          {error === 'Sign in to view this ticket.' ? (
-            <TouchableOpacity style={styles.backBtn} onPress={navigateToSignIn}>
-              <Text style={styles.backBtnText}>Sign in</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-              <Text style={styles.backBtnText}>Back</Text>
-            </TouchableOpacity>
-          )}
+          <Text style={st.emptyTitle}>{error ?? 'Ticket not found'}</Text>
+          <TouchableOpacity style={st.orangeBtn} onPress={error === 'Sign in to view this ticket.' ? navigateToSignIn : () => router.back()}>
+            <Text style={st.orangeBtnLabel}>{error === 'Sign in to view this ticket.' ? 'Sign in' : 'Back'}</Text>
+          </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f2681c" />
-          }
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Full-size hero photo with tap-to-zoom */}
-          <View style={styles.heroPhotoWrap}>
-            {primaryPhotoUrl ? (
-              <TouchableOpacity
-                style={styles.heroPhotoTouch}
-                onPress={() => setZoomPhotoUri(primaryPhotoUrl)}
-                activeOpacity={1}
-              >
-                <TicketPhoto
-                  uri={primaryPhotoUrl}
-                  style={styles.heroPhoto}
-                  placeholderStyle={styles.heroPhotoPlaceholder}
-                  resizeMode="cover"
-                />
-                <View style={styles.zoomHint}>
-                  <Ionicons name="expand-outline" size={20} color="rgba(255,255,255,0.9)" />
-                  <Text style={styles.zoomHintText}>Tap to zoom</Text>
-                </View>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.heroPhotoPlaceholder}>
-                <Ionicons name="image-outline" size={48} color="#666" />
-                <Text style={styles.heroPhotoPlaceholderText}>No photo</Text>
-              </View>
-            )}
-            {photoUrls.length > 1 && (
-              <ScrollView
-                horizontal
-                style={styles.thumbsScroll}
-                contentContainerStyle={styles.thumbsContent}
-                showsHorizontalScrollIndicator={false}
-              >
-                {photoUrls.map((url, index) => (
-                  <TouchableOpacity
-                    key={`${url}-${index}`}
-                    onPress={() => setZoomPhotoUri(url)}
-                    style={styles.thumbWrap}
-                  >
-                    <TicketPhoto uri={url} style={styles.thumb} placeholderStyle={styles.thumbPlaceholder} resizeMode="cover" />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
+        <>
+        <ScrollView style={st.scroll} contentContainerStyle={st.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f2681c" />} showsVerticalScrollIndicator={false}>
+
+          {/* ── Status bar ── */}
+          <View style={[st.statusBar, { backgroundColor: sColor + '18' }]}>
+            <View style={st.statusLeft}>
+              <View style={[st.statusDot, { backgroundColor: sColor }]} />
+              <Text style={[st.statusText, { color: sColor }]}>{statusText}</Text>
+            </View>
+            <Text style={st.priorityText}>{priorityText} priority</Text>
           </View>
 
-          <View style={styles.card}>
-            <View style={styles.postHeader}>
-              <View style={styles.postAuthorBlock}>
-                <Text style={styles.postAuthor}>
-                  {creator
-                    ? ([creator.first_name, creator.last_name].filter(Boolean).join(' ') || creator.email || 'Unknown')
-                    : 'Unknown'}
-                </Text>
-                <Text style={styles.postTimestamp}>{formatTicketDateTime(ticket.created_at)}</Text>
-                {ticket.status === 'completed' && ticket.completed_at ? (
-                  <Text style={styles.postTimestamp}>Resolved {formatTicketDateTime(ticket.completed_at)}</Text>
-                ) : null}
+          {/* ── Hero photo ── */}
+          <View style={st.heroWrap}>
+            <TouchableOpacity activeOpacity={0.95} onPress={() => primaryPhotoUrl && setZoomPhotoUri(primaryPhotoUrl)} style={st.heroTouch}>
+              {primaryPhotoUrl ? (
+                <>
+                  <TicketPhoto uri={primaryPhotoUrl} style={st.heroImg} placeholderStyle={st.heroPlaceholder} resizeMode="cover" />
+                  <View style={st.photoBadge}>
+                    <Text style={st.photoBadgeText}>{photoUrls.indexOf(zoomPhotoUri ?? '') >= 0 ? photoUrls.indexOf(zoomPhotoUri!) + 1 : 1} of {photoUrls.length}</Text>
+                  </View>
+                </>
+              ) : (
+                <View style={st.heroPlaceholder}><Ionicons name="image-outline" size={44} color="#555" /></View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* ── Title + unit ── */}
+          <View style={st.titleSection}>
+            <Text style={st.ticketTitle}>{ticketTitle}</Text>
+            <Text style={st.unitLabel}>{unitName}</Text>
+          </View>
+
+          {/* ── Tag chips ── */}
+          {tagChips.length > 0 && (
+            <View style={st.chipRow}>
+              {tagChips.map((chip, i) => (
+                <View key={`${chip.label}-${i}`} style={st.chip}>
+                  <Text style={st.chipText}>{chip.prefix}{chip.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          <View style={st.divider} />
+
+          {/* ── Notes ── */}
+          <View style={st.section}>
+            <Text style={st.sectionLabel}>NOTES</Text>
+            <Text style={st.notesBody}>{ticket.notes || 'No notes provided.'}</Text>
+          </View>
+
+          {ticket.completion_notes ? (
+            <View style={st.completionCard}>
+              <Text style={st.completionText}>{ticket.completion_notes}</Text>
+            </View>
+          ) : null}
+
+          <View style={st.divider} />
+
+          {/* ── Details ── */}
+          <View style={st.section}>
+            <Text style={st.sectionLabel}>DETAILS</Text>
+
+            <View style={st.detailRow}>
+              <Text style={st.detailLabel}>Reported by</Text>
+              <View style={st.detailRight}>
+                <View style={st.avatarOrange}>
+                  <Text style={st.avatarOrangeText}>{getInitials(creatorName)}</Text>
+                </View>
+                <Text style={st.detailValue}>{creatorName}</Text>
               </View>
             </View>
 
-            <View style={styles.metaRow}>
-              <Text style={styles.unitName}>
-                {(ticket.units as { unit_number: string } | null)?.unit_number ?? 'Unit'}
-              </Text>
-            </View>
-            <View style={styles.statusRow}>
-              <View
-                style={[
-                  styles.badge,
-                  ticket.priority === 'high' && styles.badgeHigh,
-                  ticket.priority === 'medium' && styles.badgeMedium,
-                ]}
-              >
-                <Text style={styles.badgeText}>
-                  {PRIORITY_LABELS[ticket.priority ?? 'medium'] ?? ticket.priority}
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.statusText,
-                  ticket.status === 'open' && styles.statusOpen,
-                  ticket.status === 'completed' && styles.statusCompleted,
-                ]}
-              >
-                {ticket.status ?? 'open'}
-              </Text>
+            <View style={st.detailRow}>
+              <Text style={st.detailLabel}>Date</Text>
+              <Text style={st.detailValue}>{formatTicketDateTime(ticket.created_at)}</Text>
             </View>
 
-            <Text style={styles.value}>
-              {buildingElementText}
-            </Text>
-            <View style={styles.compactChipsRow}>
-              <View style={styles.compactChip}>
-                <Ionicons name="home-outline" size={14} color="#bbb" />
-                <Text style={styles.compactChipText}>
-                  {ticket.location_scope === 'interior'
-                    ? 'Interior'
-                    : ticket.location_scope === 'exterior'
-                      ? 'Exterior'
-                      : 'Unspecified'}
+            {ticket.due_date ? (
+              <View style={st.detailRow}>
+                <Text style={st.detailLabel}>Due date</Text>
+                <Text style={[st.detailValue, new Date(ticket.due_date) < new Date() && ticket.status !== 'completed' && { color: '#f87171' }]}>
+                  {new Date(ticket.due_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {new Date(ticket.due_date) < new Date() && ticket.status !== 'completed' ? '  (overdue)' : ''}
                 </Text>
               </View>
-              <View style={styles.compactChip}>
-                <Ionicons name="layers-outline" size={14} color="#bbb" />
-                <Text style={styles.compactChipText}>
-                  {ticket.floor_level === '1st_floor'
-                    ? '1st Floor'
-                    : ticket.floor_level === '2nd_floor'
-                      ? '2nd Floor'
-                      : ticket.floor_level === '3rd_floor'
-                        ? '3rd Floor'
-                        : ticket.floor_level === 'basement'
-                          ? 'Basement'
-                      : 'Floor n/a'}
-                </Text>
-              </View>
-            </View>
+            ) : null}
 
-            <Text style={styles.notesSubtitle}>Notes</Text>
-            <View style={styles.notesWrap}>
-              <Text style={styles.notesValue}>{ticket.notes || 'No notes provided.'}</Text>
-            </View>
+            {ticket.status === 'completed' && ticket.completed_at ? (
+              <View style={st.detailRow}>
+                <Text style={st.detailLabel}>Resolved</Text>
+                <Text style={st.detailValue}>{formatTicketDateTime(ticket.completed_at)}</Text>
+              </View>
+            ) : null}
 
             <TouchableOpacity
-              style={[
-                styles.taggedButton,
-                showDemoBoardGuide && demoDetailStep === 'tagged' && styles.demoStepHighlight,
-              ]}
+              style={[st.detailRow, showDemoBoardGuide && demoDetailStep === 'tagged' && st.highlight]}
               onPress={() => {
-                if (showDemoBoardGuide && demoDetailStep === 'tagged') {
-                  setDemoDetailStep('message_board');
-                }
+                if (showDemoBoardGuide && demoDetailStep === 'tagged') setDemoDetailStep('message_board');
                 setTaggedModalVisible(true);
               }}
             >
-              <Ionicons name="pricetags-outline" size={18} color="#fff" />
-              <Text style={styles.taggedButtonText}>Tagged</Text>
-              <View style={styles.messageBoardCountBadge}>
-                <Text style={styles.messageBoardCountText}>{assigned.length}</Text>
+              <Text style={st.detailLabel}>Tagged</Text>
+              <View style={st.detailRight}>
+                {assigned.slice(0, 3).map((a, i) => {
+                  const initials = getInitials(displayContactName(a));
+                  return (
+                    <View key={a.key} style={[st.avatarMini, i > 0 && { marginLeft: -6 }]}>
+                      <Text style={st.avatarMiniText}>{initials}</Text>
+                    </View>
+                  );
+                })}
+                <Text style={st.detailLink}>
+                  {assigned.length === 0 ? 'Add' : `${assigned.length} ${assigned.length === 1 ? 'person' : 'people'}`}
+                </Text>
               </View>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.messageBoardButton,
-                showDemoBoardGuide && demoDetailStep === 'message_board' && styles.demoStepHighlight,
-              ]}
+              style={[st.detailRow, st.detailRowLast, showDemoBoardGuide && demoDetailStep === 'message_board' && st.highlight]}
               onPress={() => {
-                if (showDemoBoardGuide && demoDetailStep === 'tagged') {
-                  Alert.alert('Try Tagged first', 'Open Tagged first. It shows who is assigned and who gets notified.');
-                  return;
-                }
+                if (showDemoBoardGuide && demoDetailStep === 'tagged') { Alert.alert('Try Tagged first', 'Open Tagged first.'); return; }
                 setDemoDetailStep('done');
                 router.push({ pathname: '/tickets/[id]/comments', params: { id: ticket.id } });
               }}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" />
-              <Text style={styles.messageBoardButtonText}>Message Board</Text>
-              <View style={styles.messageBoardCountBadge}>
-                <Text style={styles.messageBoardCountText}>{commentCount}</Text>
-              </View>
+              <Text style={st.detailLabel}>Messages</Text>
+              <Text style={st.detailValue}>{commentCount}</Text>
             </TouchableOpacity>
-            {showDemoBoardGuide ? (
-              <View style={styles.demoBoardGuide}>
-                <Text style={styles.demoBoardGuideText}>
-                  {demoDetailStep === 'tagged'
-                    ? 'Start with Tagged. Tagged contacts are assigned to this ticket and get notified about updates.'
-                    : demoDetailStep === 'message_board'
-                      ? 'Great. Now open Message Board. It is a live conversation thread for this ticket.'
-                      : 'Nice work. You are ready to use this ticket flow.'}
-                </Text>
-              </View>
-            ) : null}
-
-            {ticket.status === 'open' && canResolveTicket && (
-              <TouchableOpacity
-                style={[styles.resolveButton, resolving && styles.resolveButtonDisabled]}
-                onPress={handleResolve}
-                disabled={resolving}
-              >
-                {resolving ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
-                    <Text style={styles.resolveButtonText}>Mark resolved</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
-
-            {ticket.completion_notes ? (
-              <View style={styles.completionCard}>
-                <Text style={styles.completionText}>{ticket.completion_notes}</Text>
-              </View>
-            ) : null}
           </View>
+
+          {showDemoBoardGuide ? (
+            <View style={st.demoGuide}>
+              <Text style={st.demoGuideText}>
+                {demoDetailStep === 'tagged' ? 'Start with Tagged. Tagged contacts are assigned and get notified.'
+                  : demoDetailStep === 'message_board' ? 'Great. Now open Message Board for live conversation.'
+                  : 'Nice work. You are ready to use this ticket flow.'}
+              </Text>
+            </View>
+          ) : null}
         </ScrollView>
+
+        {/* ── Bottom action bar ── */}
+        <View style={st.bottomBar}>
+          <TouchableOpacity style={st.btnOutline} onPress={() => {
+            if (showDemoBoardGuide && demoDetailStep === 'tagged') { Alert.alert('Try Tagged first', 'Open Tagged first.'); return; }
+            setDemoDetailStep('done');
+            router.push({ pathname: '/tickets/[id]/comments', params: { id: ticket.id } });
+          }}>
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={st.btnOutlineText}>Comment</Text>
+          </TouchableOpacity>
+          {canResolveTicket ? (
+            <TouchableOpacity style={[st.btnOrange, resolving && { opacity: 0.6 }]} onPress={() => setStatusModalVisible(true)} disabled={resolving}>
+              {resolving ? <ActivityIndicator color="#fff" /> : (
+                <>
+                  <Ionicons name="swap-horizontal-outline" size={17} color="#fff" />
+                  <Text style={st.btnOrangeText}>Change Status</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : <View style={{ flex: 1.2 }} />}
+        </View>
+        </>
       )}
 
-      {/* Zoom modal: full-size photo with pinch zoom + pan */}
+      {/* ─── Zoom modal ─── */}
       <Modal visible={!!zoomPhotoUri} transparent animationType="fade">
-        <Pressable style={styles.zoomBackdrop} onPress={() => setZoomPhotoUri(null)}>
-          <View style={styles.zoomContent} onStartShouldSetResponder={() => true}>
-            <ScrollView
-              style={styles.zoomScroll}
-              contentContainerStyle={styles.zoomScrollContent}
-              maximumZoomScale={6}
-              minimumZoomScale={1}
-              bouncesZoom
-              centerContent
-              showsHorizontalScrollIndicator={false}
-              showsVerticalScrollIndicator={false}
-            >
+        <Pressable style={st.zoomBg} onPress={() => setZoomPhotoUri(null)}>
+          <View style={st.zoomWrap} onStartShouldSetResponder={() => true}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={st.zoomInner} maximumZoomScale={6} minimumZoomScale={1} bouncesZoom centerContent showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
               {zoomLoading ? (
-                <View style={[styles.zoomPhotoPlaceholder, { width: SCREEN_WIDTH, height: ZOOM_MODAL_PHOTO_HEIGHT }]}>
-                  <ActivityIndicator size="large" color="#f2681c" />
-                </View>
+                <View style={[st.zoomPlaceholder, { width: SCREEN_WIDTH, height: ZOOM_MODAL_PHOTO_HEIGHT }]}><ActivityIndicator size="large" color="#f2681c" /></View>
               ) : zoomPhotoSignedUri ? (
-                <Image
-                  source={{ uri: zoomPhotoSignedUri }}
-                  style={[styles.zoomPhoto, { width: SCREEN_WIDTH, minHeight: ZOOM_MODAL_PHOTO_HEIGHT }]}
-                  resizeMode="contain"
-                />
+                <Image source={{ uri: zoomPhotoSignedUri }} style={{ width: SCREEN_WIDTH, minHeight: ZOOM_MODAL_PHOTO_HEIGHT, backgroundColor: '#222' }} resizeMode="contain" />
               ) : (
-                <View style={[styles.zoomPhotoPlaceholder, { width: SCREEN_WIDTH, height: ZOOM_MODAL_PHOTO_HEIGHT }]}>
-                  <Ionicons name="image-outline" size={42} color="#666" />
-                </View>
+                <View style={[st.zoomPlaceholder, { width: SCREEN_WIDTH, height: ZOOM_MODAL_PHOTO_HEIGHT }]}><Ionicons name="image-outline" size={42} color="#666" /></View>
               )}
             </ScrollView>
-            <Text style={styles.zoomHelperText}>Pinch to zoom • Drag to pan</Text>
-            <TouchableOpacity style={styles.zoomClose} onPress={() => setZoomPhotoUri(null)}>
+            <Text style={st.zoomHint}>Pinch to zoom · Drag to pan</Text>
+            <TouchableOpacity style={st.zoomClose} onPress={() => setZoomPhotoUri(null)}>
               <Ionicons name="close" size={28} color="#fff" />
             </TouchableOpacity>
           </View>
         </Pressable>
       </Modal>
 
-      <Modal visible={taggedModalVisible} transparent animationType="slide">
-        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setTaggedModalVisible(false)}>
-          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
-            <Text style={styles.pickerTitle}>Tagged contacts</Text>
-            <ScrollView style={styles.pickerScroll}>
-              {assigned.length === 0 ? (
-                <Text style={styles.emptyPickerText}>No tagged contacts yet.</Text>
-              ) : (
-                assigned.map((a) => (
-                  <TouchableOpacity key={a.key} style={styles.pickerRow} onPress={() => callAssignedContact(a)}>
-                    <Text style={styles.pickerRowText}>{displayContactName(a)}</Text>
-                    <Text style={styles.pickerRowSubText}>
-                      {a.phone?.trim() ? formatPhoneNumberDisplay(a.phone) : 'No phone number'}
-                    </Text>
-                  </TouchableOpacity>
-                ))
-              )}
-            </ScrollView>
-            <TouchableOpacity
-              style={styles.pickerClose}
-              onPress={() => {
-                setTaggedModalVisible(false);
-                setAddContactModalVisible(true);
-                fetchContactOptions();
-              }}
-            >
-              <Text style={styles.pickerCloseText}>Add contact</Text>
+      {/* ─── Menu modal (delete) ─── */}
+      <Modal visible={menuVisible} transparent animationType="fade">
+        <Pressable style={st.menuBg} onPress={() => setMenuVisible(false)}>
+          <View style={st.menuCard}>
+            <TouchableOpacity style={st.menuRow} onPress={() => { setMenuVisible(false); handleDelete(); }}>
+              <Ionicons name="trash-outline" size={20} color="#f87171" />
+              <Text style={st.menuRowTextDanger}>Delete ticket</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.pickerCloseSecondary} onPress={() => setTaggedModalVisible(false)}>
-              <Text style={styles.pickerCloseText}>Close</Text>
+            <TouchableOpacity style={[st.menuRow, st.menuRowLast]} onPress={() => setMenuVisible(false)}>
+              <Ionicons name="close-outline" size={20} color="#999" />
+              <Text style={st.menuRowText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ─── Tagged modal ─── */}
+      <Modal visible={taggedModalVisible} transparent animationType="slide">
+        <TouchableOpacity style={st.modalBg} activeOpacity={1} onPress={() => setTaggedModalVisible(false)}>
+          <TouchableOpacity style={st.sheet} activeOpacity={1} onPress={() => {}}>
+            <Text style={st.sheetTitle}>Tagged contacts</Text>
+            <ScrollView style={st.sheetScroll}>
+              {assigned.length === 0 ? (
+                <Text style={st.sheetEmpty}>No tagged contacts yet.</Text>
+              ) : assigned.map((a) => (
+                <TouchableOpacity key={a.key} style={st.sheetRow} onPress={() => callAssignedContact(a)}>
+                  <Text style={st.sheetRowText}>{displayContactName(a)}</Text>
+                  <Text style={st.sheetRowSub}>{a.phone?.trim() ? formatPhoneNumberDisplay(a.phone) : 'No phone number'}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={st.sheetBtnPrimary} onPress={() => { setTaggedModalVisible(false); setAddContactModalVisible(true); fetchContactOptions(); }}>
+              <Text style={st.sheetBtnText}>Add contact</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={st.sheetBtnSecondary} onPress={() => setTaggedModalVisible(false)}>
+              <Text style={st.sheetBtnText}>Close</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
+      {/* ─── Status modal ─── */}
+      <Modal visible={statusModalVisible} transparent animationType="slide">
+        <TouchableOpacity style={st.modalBg} activeOpacity={1} onPress={() => setStatusModalVisible(false)}>
+          <TouchableOpacity style={st.sheet} activeOpacity={1} onPress={() => {}}>
+            <Text style={st.sheetTitle}>Update status</Text>
+            <ScrollView style={st.sheetScroll}>
+              {([
+                { value: 'open', label: 'Open', icon: 'radio-button-off-outline' as const, color: '#6fcf7a' },
+                { value: 'in_progress', label: 'In Progress', icon: 'time-outline' as const, color: '#facc15' },
+                { value: 'completed', label: 'Resolved', icon: 'checkmark-circle-outline' as const, color: '#9aa3af' },
+              ]).map((opt) => (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[st.sheetRow, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, ticket?.status === opt.value && { backgroundColor: '#444' }]}
+                  onPress={() => handleStatusChange(opt.value)}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Ionicons name={opt.icon} size={20} color={opt.color} />
+                    <Text style={st.sheetRowText}>{opt.label}</Text>
+                  </View>
+                  {ticket?.status === opt.value && <Ionicons name="checkmark" size={20} color="#f2681c" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={st.sheetBtnSecondary} onPress={() => setStatusModalVisible(false)}>
+              <Text style={st.sheetBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ─── Add contact modal ─── */}
       <Modal visible={addContactModalVisible} transparent animationType="slide">
-        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setAddContactModalVisible(false)}>
-          <TouchableOpacity style={styles.pickerModal} activeOpacity={1} onPress={() => {}}>
-            <Text style={styles.pickerTitle}>Add contact to ticket</Text>
+        <TouchableOpacity style={st.modalBg} activeOpacity={1} onPress={() => setAddContactModalVisible(false)}>
+          <TouchableOpacity style={st.sheet} activeOpacity={1} onPress={() => {}}>
+            <Text style={st.sheetTitle}>Add contact to ticket</Text>
             {loadingContacts ? (
-              <View style={styles.pickerLoadingWrap}>
-                <ActivityIndicator color="#f2681c" />
-              </View>
+              <View style={{ padding: 24, alignItems: 'center' }}><ActivityIndicator color="#f2681c" /></View>
             ) : (
-              <ScrollView style={styles.pickerScroll}>
-                {contactOptions
-                  .filter((c) => !assigned.some((a) => a.contact_id === c.id))
-                  .map((c) => (
-                    <TouchableOpacity
-                      key={c.id}
-                      style={styles.pickerRow}
-                      onPress={() => addContactToTicket(c.id)}
-                      disabled={addingContactId === c.id}
-                    >
-                      <Text style={styles.pickerRowText}>{displayContactName(c)}</Text>
-                      <Text style={styles.pickerRowSubText}>
-                        {c.phone?.trim() ? formatPhoneNumberDisplay(c.phone) : c.email || 'No contact info'}
-                      </Text>
-                      {addingContactId === c.id ? <ActivityIndicator size="small" color="#f2681c" /> : null}
-                    </TouchableOpacity>
-                  ))}
+              <ScrollView style={st.sheetScroll}>
+                {contactOptions.filter((c) => !assigned.some((a) => a.contact_id === c.id)).map((c) => (
+                  <TouchableOpacity key={c.id} style={st.sheetRow} onPress={() => addContactToTicket(c.id)} disabled={addingContactId === c.id}>
+                    <Text style={st.sheetRowText}>{displayContactName(c)}</Text>
+                    <Text style={st.sheetRowSub}>{c.phone?.trim() ? formatPhoneNumberDisplay(c.phone) : c.email || 'No contact info'}</Text>
+                    {addingContactId === c.id ? <ActivityIndicator size="small" color="#f2681c" /> : null}
+                  </TouchableOpacity>
+                ))}
               </ScrollView>
             )}
-            <TouchableOpacity style={styles.pickerCloseSecondary} onPress={() => setAddContactModalVisible(false)}>
-              <Text style={styles.pickerCloseText}>Done</Text>
+            <TouchableOpacity style={st.sheetBtnSecondary} onPress={() => setAddContactModalVisible(false)}>
+              <Text style={st.sheetBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -723,512 +740,114 @@ export default function TicketDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#3b3b3b',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#4a4a4a',
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  headerRight: {
-    width: 40,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  errorText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#f2681c',
-    marginBottom: 12,
-  },
-  backBtn: {
-    marginTop: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    backgroundColor: '#f2681c',
-    borderRadius: 8,
-  },
-  backBtnText: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  heroPhotoWrap: {
-    marginBottom: 16,
-  },
-  heroPhotoTouch: {
-    width: '100%',
-    height: HERO_PHOTO_HEIGHT,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#4a4a4a',
-  },
-  heroPhoto: {
-    width: '100%',
-    height: HERO_PHOTO_HEIGHT,
-    borderRadius: 12,
-    backgroundColor: '#4a4a4a',
-  },
-  heroPhotoPlaceholder: {
-    width: '100%',
-    height: HERO_PHOTO_HEIGHT,
-    borderRadius: 12,
-    backgroundColor: '#4a4a4a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroPhotoPlaceholderText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#666',
-    marginTop: 8,
-  },
-  zoomHint: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  zoomHintText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: 'rgba(255,255,255,0.9)',
-  },
-  thumbsScroll: {
-    marginTop: 8,
-    maxHeight: 72,
-  },
-  thumbsContent: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 4,
-  },
-  thumbWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#4a4a4a',
-  },
-  thumb: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
-    backgroundColor: '#4a4a4a',
-  },
-  thumbPlaceholder: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
-    backgroundColor: '#4a4a4a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  card: {
-    backgroundColor: '#4a4a4a',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#999',
-    marginBottom: 10,
-  },
-  postHeader: {
-    marginBottom: 10,
-  },
-  postAuthorBlock: {
-    gap: 2,
-  },
-  postAuthor: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  postTimestamp: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#aaa',
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 8,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 8,
-  },
-  compactChipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
-  },
-  compactChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#555',
-  },
-  compactChipText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#ddd',
-  },
-  unitName: {
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    backgroundColor: '#555',
-  },
-  badgeHigh: {
-    backgroundColor: '#a33',
-  },
-  badgeMedium: {
-    backgroundColor: '#8a6a1f',
-  },
-  badgeText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-  },
-  statusText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
-  },
-  statusOpen: {
-    color: '#6fcf7a',
-  },
-  statusCompleted: {
-    color: '#9aa3af',
-  },
-  label: {
-    fontSize: 12,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#999',
-    marginTop: 10,
-    marginBottom: 4,
-  },
-  value: {
-    fontSize: 16,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-  },
-  valueSecondary: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
-    marginTop: 2,
-  },
-  notesValue: {
-    fontSize: 15,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-    lineHeight: 22,
-  },
-  notesSubtitle: {
-    marginTop: 12,
-    marginBottom: 6,
-    fontSize: 12,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#9ca3af',
-  },
-  notesWrap: {
-    borderLeftWidth: 2,
-    borderLeftColor: '#666',
-    paddingLeft: 10,
-  },
-  completionCard: {
-    marginTop: 10,
-    backgroundColor: '#4f5c4f',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  completionText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#d8ead8',
-    lineHeight: 20,
-  },
-  taggedButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#5a5a5a',
-    borderRadius: 8,
-    marginTop: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-  },
-  taggedButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  messageBoardButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#5a5a5a',
-    borderRadius: 8,
-    paddingVertical: 10,
-    marginTop: 10,
-    paddingHorizontal: 10,
-  },
-  messageBoardButtonText: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  messageBoardCountBadge: {
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#f2681c',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  messageBoardCountText: {
-    fontSize: 12,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  demoBoardGuide: {
-    marginTop: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#f2681c',
-    backgroundColor: '#4a4a4a',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-  },
-  demoBoardGuideText: {
-    color: '#d1d5db',
-    fontSize: 12,
-    lineHeight: 17,
-    fontFamily: 'Inter_400Regular',
-  },
-  assignedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#555',
-  },
-  assignedName: {
-    fontSize: 16,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-  },
-  resolveButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#f2681c',
-    borderRadius: 8,
-    paddingVertical: 10,
-    marginTop: 10,
-    paddingHorizontal: 10,
-  },
-  resolveButtonDisabled: {
-    opacity: 0.7,
-  },
-  resolveButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  demoStepHighlight: {
-    borderWidth: 1.5,
-    borderColor: '#f2681c',
-  },
-  zoomBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  zoomContent: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-  },
-  zoomScroll: {
-    flex: 1,
-  },
-  zoomScrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  zoomPhoto: {
-    minHeight: ZOOM_MODAL_PHOTO_HEIGHT,
-    backgroundColor: '#333',
-  },
-  zoomPhotoPlaceholder: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  zoomHelperText: {
-    position: 'absolute',
-    bottom: 28,
-    alignSelf: 'center',
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-  zoomClose: {
-    position: 'absolute',
-    top: 50,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  pickerModal: {
-    backgroundColor: '#3b3b3b',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    maxHeight: '70%',
-    paddingBottom: 24,
-  },
-  pickerTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#4a4a4a',
-  },
-  pickerScroll: {
-    maxHeight: 320,
-  },
-  pickerRow: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#4a4a4a',
-  },
-  pickerRowText: {
-    fontSize: 16,
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
-  },
-  pickerRowSubText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#aaa',
-    marginTop: 4,
-  },
-  emptyPickerText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#999',
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-  },
-  pickerClose: {
-    marginTop: 16,
-    marginHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#f2681c',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  pickerCloseSecondary: {
-    marginTop: 10,
-    marginHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#5a5a5a',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  pickerCloseText: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
-  },
-  pickerLoadingWrap: {
-    paddingVertical: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+/* ════════════════════════════════════════════════════════════════════════════ */
+
+const st = StyleSheet.create({
+  // ── Layout ──
+  container:     { flex: 1, backgroundColor: '#2e2e2e' },
+  scroll:        { flex: 1 },
+  scrollContent: { paddingBottom: 8 },
+  centered:      { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+
+  // ── Header ──
+  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#2e2e2e' },
+  headerSide:  { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+
+  // ── Error / empty ──
+  emptyTitle:   { fontSize: 18, fontFamily: 'Inter_600SemiBold', color: '#fff', marginTop: 16, textAlign: 'center' },
+  orangeBtn:    { marginTop: 20, paddingVertical: 12, paddingHorizontal: 24, backgroundColor: '#f2681c', borderRadius: 8 },
+  orangeBtnLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+
+  // ── Status bar ──
+  statusBar:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
+  statusLeft:   { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusDot:    { width: 8, height: 8, borderRadius: 4 },
+  statusText:   { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  priorityText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#d4a017' },
+
+  // ── Hero image ──
+  heroWrap:        { paddingHorizontal: 12, paddingTop: 4, paddingBottom: 4 },
+  heroTouch:       { borderRadius: 12, overflow: 'hidden', backgroundColor: '#3a3a3a' },
+  heroImg:         { width: '100%', height: 360, backgroundColor: '#3a3a3a' },
+  heroPlaceholder: { width: '100%', height: 360, backgroundColor: '#3a3a3a', justifyContent: 'center', alignItems: 'center', borderRadius: 12 },
+  photoBadge:      { position: 'absolute', bottom: 10, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
+  photoBadgeText:  { fontSize: 11, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+
+  // ── Title ──
+  titleSection: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
+  ticketTitle:  { fontSize: 22, fontFamily: 'Inter_600SemiBold', color: '#fff', marginBottom: 4 },
+  unitLabel:    { fontSize: 14, fontFamily: 'Inter_400Regular', color: '#999' },
+
+  // ── Tag chips ──
+  chipRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, marginBottom: 14 },
+  chip:     { borderWidth: 1, borderColor: '#f2681c', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
+  chipText: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: '#f2681c' },
+
+  // ── Divider ──
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#444', marginHorizontal: 16, marginVertical: 10 },
+
+  // ── Sections ──
+  section:      { paddingHorizontal: 16, marginBottom: 4 },
+  sectionLabel: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: '#f2681c', letterSpacing: 1.2, marginBottom: 8, textTransform: 'uppercase' },
+  notesBody:    { fontSize: 15, fontFamily: 'Inter_400Regular', color: '#ddd', lineHeight: 22, marginBottom: 6 },
+
+  // ── Completion ──
+  completionCard: { marginHorizontal: 16, marginBottom: 6, backgroundColor: '#3d4a3d', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12 },
+  completionText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: '#c8e0c8', lineHeight: 20 },
+
+  // ── Detail rows ──
+  detailRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#444' },
+  detailRowLast: { borderBottomWidth: 0 },
+  detailLabel:   { fontSize: 14, fontFamily: 'Inter_400Regular', color: '#888' },
+  detailRight:   { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  detailValue:   { fontSize: 14, fontFamily: 'Inter_400Regular', color: '#eee' },
+  detailLink:    { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#f2681c' },
+
+  // ── Avatars ──
+  avatarOrange:     { width: 28, height: 28, borderRadius: 14, backgroundColor: '#f2681c', justifyContent: 'center', alignItems: 'center' },
+  avatarOrangeText: { fontSize: 11, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  avatarMini:       { width: 22, height: 22, borderRadius: 11, backgroundColor: '#555', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#2e2e2e' },
+  avatarMiniText:   { fontSize: 8, fontFamily: 'Inter_600SemiBold', color: '#ccc' },
+
+  // ── Demo guide ──
+  demoGuide:     { marginHorizontal: 16, marginVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#f2681c', backgroundColor: '#3a3a3a', padding: 10 },
+  demoGuideText: { color: '#d1d5db', fontSize: 12, lineHeight: 17, fontFamily: 'Inter_400Regular' },
+  highlight:     { borderWidth: 1.5, borderColor: '#f2681c', borderRadius: 6 },
+
+  // ── Bottom bar ──
+  bottomBar:      { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#444', backgroundColor: '#2e2e2e' },
+  btnOutline:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 13, borderRadius: 10, borderWidth: 1, borderColor: '#555', backgroundColor: '#383838' },
+  btnOutlineText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  btnOrange:      { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 13, borderRadius: 10, backgroundColor: '#f2681c' },
+  btnOrangeText:  { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+
+  // ── Zoom modal ──
+  zoomBg:          { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center' },
+  zoomWrap:        { flex: 1, width: '100%', justifyContent: 'center' },
+  zoomInner:       { flexGrow: 1, justifyContent: 'center', alignItems: 'center' },
+  zoomPlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  zoomHint:        { position: 'absolute', bottom: 28, alignSelf: 'center', color: 'rgba(255,255,255,0.85)', fontSize: 12, fontFamily: 'Inter_400Regular', backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  zoomClose:       { position: 'absolute', top: 50, right: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+
+  // ── Menu modal ──
+  menuBg:            { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  menuCard:          { backgroundColor: '#3a3a3a', borderRadius: 12, width: 240, overflow: 'hidden' },
+  menuRow:           { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 18, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#444' },
+  menuRowLast:       { borderBottomWidth: 0 },
+  menuRowText:       { fontSize: 15, fontFamily: 'Inter_400Regular', color: '#ccc' },
+  menuRowTextDanger: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#f87171' },
+
+  // ── Bottom sheets / modals ──
+  modalBg:           { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheet:             { backgroundColor: '#333', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '70%', paddingBottom: 24 },
+  sheetTitle:        { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#fff', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#444' },
+  sheetScroll:       { maxHeight: 320 },
+  sheetRow:          { paddingHorizontal: 20, paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#444' },
+  sheetRowText:      { fontSize: 15, fontFamily: 'Inter_400Regular', color: '#fff' },
+  sheetRowSub:       { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#999', marginTop: 3 },
+  sheetEmpty:        { fontSize: 14, fontFamily: 'Inter_400Regular', color: '#888', paddingHorizontal: 20, paddingVertical: 20 },
+  sheetBtnPrimary:   { marginTop: 14, marginHorizontal: 20, paddingVertical: 12, backgroundColor: '#f2681c', borderRadius: 8, alignItems: 'center' },
+  sheetBtnSecondary: { marginTop: 8, marginHorizontal: 20, paddingVertical: 12, backgroundColor: '#4a4a4a', borderRadius: 8, alignItems: 'center' },
+  sheetBtnText:      { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#fff' },
 });

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
+  TextInput,
   Dimensions,
   Modal,
   Alert,
@@ -20,6 +21,7 @@ import { navigateToSignIn } from '../../lib/navigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase/client';
 import { compareUnitNumbers } from '../../lib/utils/unitSort';
+import { BUILDING_LABELS } from '../../lib/constants/tickets';
 import { formatPhoneNumberDisplay } from '../../lib/utils/phone';
 import {
   completeHomeDemo,
@@ -186,9 +188,14 @@ export default function HomeScreen() {
   const [unitsError, setUnitsError] = useState<string | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<MapUnit | null>(null);
   const [unitsListModalVisible, setUnitsListModalVisible] = useState(false);
+  const [unitSearchQuery, setUnitSearchQuery] = useState('');
   const [contactCardPerson, setContactCardPerson] = useState<ProfileSnippet | null>(null);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [openTicketCount, setOpenTicketCount] = useState(0);
+  const [recentActivity, setRecentActivity] = useState<{ id: string; text: string; unitName: string; detail: string; time: string; initials: string }[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showHomeDemo, setShowHomeDemo] = useState(false);
   const [demoInfoType, setDemoInfoType] = useState<'units' | 'tickets' | 'notifications' | null>(null);
@@ -201,6 +208,11 @@ export default function HomeScreen() {
     Inter_400Regular,
     Inter_600SemiBold,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimeout(true), 5000);
+    return () => clearTimeout(t);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -212,10 +224,123 @@ export default function HomeScreen() {
         setCurrentUserId(session?.user?.id ?? null);
         if (!session) {
           setUnreadCount(0);
+          setCurrentUserName(null);
+          setCurrentUserRole(null);
+          setOpenTicketCount(0);
+          setRecentActivity([]);
           setShowHomeDemo(false);
           setHomeDemoProgress({ units: false, tickets: false, notifications: false });
           return;
         }
+
+        // Fetch user profile info
+        const { data: myProfile } = await supabase
+          .from('profiles')
+          .select('first_name, role')
+          .eq('id', session.user.id)
+          .maybeSingle();
+        if (mounted) {
+          setCurrentUserName((myProfile as { first_name: string | null } | null)?.first_name ?? null);
+          setCurrentUserRole((myProfile as { role: string | null } | null)?.role ?? null);
+        }
+
+        // Fetch open ticket count
+        const { count: openCount } = await supabase
+          .from('tickets')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'open');
+        if (mounted) setOpenTicketCount(openCount ?? 0);
+
+        // Fetch most recent activity — latest ticket OR comment, whichever is newer
+        const isSubcontractor = (myProfile as { role: string | null } | null)?.role === 'subcontractor';
+        const timeAgo = (d: string) => {
+          const diff = Date.now() - new Date(d).getTime();
+          const mins = Math.floor(diff / 60000);
+          if (mins < 1) return 'Just now';
+          if (mins < 60) return `${mins}m ago`;
+          const hrs = Math.floor(mins / 60);
+          if (hrs < 24) return `${hrs}h ago`;
+          const days = Math.floor(hrs / 24);
+          if (days < 7) return `${days}d ago`;
+          return `${Math.floor(days / 7)}w ago`;
+        };
+
+        // Get latest ticket
+        const { data: latestTickets } = await supabase
+          .from('tickets')
+          .select('id, building_element, status, created_at, completed_at, created_by, units(unit_number), profiles:created_by(first_name, last_name)')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        // Get latest comment
+        const { data: latestComments } = await supabase
+          .from('ticket_comments')
+          .select('id, ticket_id, message, created_at, user_id, profiles:user_id(first_name, last_name), tickets:ticket_id(id, units(unit_number), building_element)')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (mounted) {
+          type ActivityItem = { id: string; text: string; unitName: string; detail: string; time: string; initials: string; timestamp: number };
+          const candidates: ActivityItem[] = [];
+
+          // Ticket candidate
+          const t = latestTickets?.[0] as any;
+          if (t) {
+            const unit = Array.isArray(t.units) ? t.units[0] : t.units;
+            const creator = Array.isArray(t.profiles) ? t.profiles[0] : t.profiles;
+            const name = creator ? [creator.first_name, creator.last_name].filter(Boolean).join(' ') : 'Someone';
+            const initials = name.split(' ').map((w: string) => w[0]).filter(Boolean).join('').toUpperCase().slice(0, 2);
+            const unitName = unit?.unit_number ?? 'a unit';
+            const element = t.building_element ? ((BUILDING_LABELS as Record<string, string>)[t.building_element] ?? t.building_element) : '';
+            const eventTime = t.status === 'completed' && t.completed_at ? t.completed_at : t.created_at;
+            const action = t.status === 'completed' ? 'resolved a ticket on' : 'opened a ticket on';
+            candidates.push({
+              id: t.id,
+              text: `${name} ${action}`,
+              unitName,
+              detail: element ? `${element} · ${timeAgo(eventTime)}` : timeAgo(eventTime),
+              time: timeAgo(eventTime),
+              initials,
+              timestamp: new Date(eventTime).getTime(),
+            });
+          }
+
+          // Comment candidate
+          const c = latestComments?.[0] as any;
+          if (c) {
+            const cProfile = Array.isArray(c.profiles) ? c.profiles[0] : c.profiles;
+            const cName = cProfile ? [cProfile.first_name, cProfile.last_name].filter(Boolean).join(' ') : 'Someone';
+            const cInitials = cName.split(' ').map((w: string) => w[0]).filter(Boolean).join('').toUpperCase().slice(0, 2);
+            const cTicket = Array.isArray(c.tickets) ? c.tickets[0] : c.tickets;
+            const cUnit = cTicket ? (Array.isArray(cTicket.units) ? cTicket.units[0] : cTicket.units) : null;
+            const cUnitName = cUnit?.unit_number ?? 'a ticket';
+            const cElement = cTicket?.building_element ? ((BUILDING_LABELS as Record<string, string>)[cTicket.building_element] ?? cTicket.building_element) : '';
+            candidates.push({
+              id: cTicket?.id ?? c.ticket_id,
+              text: `${cName} commented on`,
+              unitName: cUnitName,
+              detail: cElement ? `${cElement} · ${timeAgo(c.created_at)}` : timeAgo(c.created_at),
+              time: timeAgo(c.created_at),
+              initials: cInitials,
+              timestamp: new Date(c.created_at).getTime(),
+            });
+          }
+
+          // Pick most recent, filter for subs
+          let best = candidates.sort((a, b) => b.timestamp - a.timestamp);
+          if (isSubcontractor && best.length > 0) {
+            // For subs, verify they're tagged in the ticket
+            const { data: taggedTickets } = await supabase
+              .from('ticket_contact_assignments')
+              .select('ticket_id, contacts!inner(profile_id)')
+              .eq('contacts.profile_id', session.user.id);
+            const taggedSet = new Set((taggedTickets ?? []).map((r: any) => r.ticket_id));
+            best = best.filter((item) => taggedSet.has(item.id));
+          }
+
+          setRecentActivity(best.slice(0, 1).map(({ timestamp: _, ...rest }) => rest));
+        }
+
         const pending = await isHomeDemoPending(session.user.id);
         if (pending) {
           const progress = await getHomeDemoProgress(session.user.id);
@@ -458,6 +583,12 @@ export default function HomeScreen() {
     [units]
   );
 
+  const filteredUnitsForList = useMemo(() => {
+    const q = unitSearchQuery.trim().toLowerCase();
+    if (!q) return sortedUnitsForList;
+    return sortedUnitsForList.filter((u) => u.unit_number.toLowerCase().includes(q));
+  }, [sortedUnitsForList, unitSearchQuery]);
+
   const callPerson = useCallback((person: ProfileSnippet | null | undefined) => {
     if (!person?.phone?.trim()) {
       Alert.alert('No phone number', `${displayName(person)} does not have a phone number yet.`);
@@ -466,8 +597,13 @@ export default function HomeScreen() {
     Linking.openURL(`tel:${normalizePhoneForDial(person.phone)}`);
   }, []);
 
-  if (!fontsLoaded) {
-    return null;
+  // Never block the UI: show content after fonts load or after 5s (avoids blank/unresponsive screen on some devices)
+  if (!fontsLoaded && !fontTimeout) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#2e2e2e', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: '#9ca3af', fontSize: 14 }}>Loading…</Text>
+      </View>
+    );
   }
 
   return (
@@ -512,8 +648,41 @@ export default function HomeScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Select a Unit</Text>
-        <Text style={styles.pinchHint}>Pinch to zoom • Tap a unit on the map</Text>
+        {/* ── Greeting header ── */}
+        {hasSession && currentUserName ? (
+          <View style={styles.greetingWrap}>
+            <Text style={styles.greetingText}>
+              Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}, {currentUserName}
+            </Text>
+            <Text style={styles.greetingSub}>{openTicketCount} open ticket{openTicketCount === 1 ? '' : 's'}</Text>
+          </View>
+        ) : null}
+
+        {/* ── Latest activity ── */}
+        {hasSession && recentActivity.length > 0 ? (
+          <View style={styles.activityCard}>
+            <TouchableOpacity
+              style={styles.activityRow}
+              onPress={() => router.push({ pathname: '/tickets/[id]', params: { id: recentActivity[0].id } })}
+              activeOpacity={0.7}
+            >
+              <View style={styles.activityAvatar}>
+                <Text style={styles.activityAvatarText}>{recentActivity[0].initials}</Text>
+              </View>
+              <View style={styles.activityBody}>
+                <Text style={styles.activityText}>
+                  {recentActivity[0].text} <Text style={styles.activityUnitLink}>{recentActivity[0].unitName}</Text>
+                </Text>
+                <Text style={styles.activityDetail}>{recentActivity[0].detail}</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.seeMoreRow} onPress={() => router.push('/tickets')}>
+              <Text style={styles.seeMoreText}>See all tickets</Text>
+              <Ionicons name="chevron-forward" size={14} color="#f2681c" />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {showHomeDemo ? (
           <View style={styles.mapTipCard}>
             <Text style={styles.mapTipTitle}>Map tip</Text>
@@ -537,7 +706,6 @@ export default function HomeScreen() {
         {unitsLoaded && unitsError && (
           <Text style={styles.unitsError}>{unitsError}</Text>
         )}
-        <View style={{ height: 10 }} />
         {mapHeight > 0 ? (
           <View style={[styles.mapViewport, { height: mapHeight }]}>
             <ScrollView
@@ -567,7 +735,6 @@ export default function HomeScreen() {
             <Image source={MAP_SOURCE} style={styles.mapImage} resizeMode="contain" />
           </View>
         )}
-        <View style={{ height: 10 }} />
 
         <View style={styles.actionButtons}>
           <TouchableOpacity
@@ -604,18 +771,35 @@ export default function HomeScreen() {
         visible={unitsListModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setUnitsListModalVisible(false)}
+        onRequestClose={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
       >
         <TouchableOpacity
           style={styles.modalBackdrop}
           activeOpacity={1}
-          onPress={() => setUnitsListModalVisible(false)}
+          onPress={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
         >
           <TouchableOpacity style={styles.unitsListModal} activeOpacity={1} onPress={() => {}}>
             <Text style={styles.unitsListModalTitle}>All Units</Text>
             <Text style={styles.unitsListModalSubtitle}>Click to view</Text>
+            <View style={styles.unitSearchWrap}>
+              <Ionicons name="search-outline" size={16} color="#999" />
+              <TextInput
+                style={styles.unitSearchInput}
+                value={unitSearchQuery}
+                onChangeText={setUnitSearchQuery}
+                placeholder="Search by building name..."
+                placeholderTextColor="#888"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {unitSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setUnitSearchQuery('')}>
+                  <Ionicons name="close-circle" size={18} color="#999" />
+                </TouchableOpacity>
+              )}
+            </View>
             <ScrollView style={styles.unitsListScroll}>
-              {sortedUnitsForList.map((unit) => (
+              {filteredUnitsForList.map((unit) => (
                 <TouchableOpacity
                   key={unit.id}
                   style={styles.unitsListRow}
@@ -631,7 +815,7 @@ export default function HomeScreen() {
             </ScrollView>
             <TouchableOpacity
               style={styles.modalCloseButton}
-              onPress={() => setUnitsListModalVisible(false)}
+              onPress={() => { setUnitsListModalVisible(false); setUnitSearchQuery(''); }}
             >
               <Text style={styles.modalCloseButtonText}>Close</Text>
             </TouchableOpacity>
@@ -839,7 +1023,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   header: {
     flexDirection: 'row',
@@ -922,7 +1106,7 @@ const styles = StyleSheet.create({
   },
   demoInfoModal: {
     width: '88%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
     borderWidth: 1,
     borderColor: '#4a4a4a',
     borderRadius: 14,
@@ -975,7 +1159,97 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 24,
+    paddingBottom: 16,
+  },
+  greetingWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 2,
+    paddingBottom: 14,
+  },
+  greetingText: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  greetingSub: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#999',
+    marginTop: 4,
+  },
+  activityCard: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 18,
+    backgroundColor: '#3a3a3a',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  activityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  activityRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#4a4a4a',
+  },
+  activityAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f2681c',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    marginTop: 2,
+  },
+  activityAvatarText: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
+  activityBody: {
+    flex: 1,
+  },
+  activityText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#ddd',
+    lineHeight: 20,
+  },
+  activityUnitLink: {
+    color: '#f2681c',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  activityDetail: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#777',
+    marginTop: 2,
+  },
+  seeMoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#4a4a4a',
+  },
+  seeMoreText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#f2681c',
+  },
+  mapLabel: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#777',
+    paddingHorizontal: 20,
+    marginBottom: 2,
+    marginTop: 2,
   },
   title: {
     fontSize: 24,
@@ -1065,7 +1339,7 @@ const styles = StyleSheet.create({
   mapImage: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   mapInner: {
     position: 'relative',
@@ -1075,8 +1349,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 16,
+    paddingBottom: 12,
   },
   actionButton: {
     flexDirection: 'row',
@@ -1128,6 +1402,24 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#5a5a5a',
+  },
+  unitSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#555',
+  },
+  unitSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#fff',
+    paddingVertical: 0,
   },
   unitsListScroll: {
     maxHeight: 400,

@@ -1,6 +1,7 @@
 // Import the createClient function from Supabase's JavaScript client library
 // This is the main function we use to connect to our Supabase backend
 import { createClient } from '@supabase/supabase-js';
+import { AppState } from 'react-native';
 
 // This polyfill is required for Supabase to work in React Native
 // React Native doesn't have the URL API that web browsers have, so this adds it
@@ -42,3 +43,15 @@ export const supabase = createClient(
     },
   }
 );
+
+// Tell Supabase when the app goes background/foreground so it can pause
+// and resume token refresh. Without this, the refresh can hang indefinitely
+// on iOS when the app is briefly backgrounded during sign-in (e.g. Face ID,
+// notification prompt, password manager) — causing the infinite loading bug.
+AppState.addEventListener('change', (nextState) => {
+  if (nextState === 'active') {
+    supabase.auth.startAutoRefresh();
+  } else {
+    supabase.auth.stopAutoRefresh();
+  }
+});

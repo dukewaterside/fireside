@@ -4,10 +4,10 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Dimensions,
-  TouchableOpacity,
+  Pressable,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -15,7 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase/client';
 import { markOnboardingCompleted } from '../lib/onboarding';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Minimum touch target size (Apple HIG); use hitSlop to extend small buttons
+const MIN_TOUCH_SLOP = 22;
 
 type Slide = {
   id: string;
@@ -29,41 +30,42 @@ const SLIDES: Slide[] = [
     id: 'welcome',
     icon: 'flame-outline',
     title: 'Welcome to Fireside',
-    body: 'Track units, create tickets, assign contacts, and stay updated in one place.',
+    body: 'Your dashboard shows recent activity, open tickets, and the site map — all in one place.',
   },
   {
     id: 'units',
     icon: 'business-outline',
     title: 'Units + Map',
-    body: 'On Home, tap Units to open the full list. Tap any unit to open details and create tickets for that unit.',
+    body: 'Tap a unit on the map or open the Units list to view details, assigned contacts, and create tickets.',
   },
   {
     id: 'tickets',
     icon: 'ticket-outline',
-    title: 'Create + View Tickets',
-    body: 'View all tickets, open details, mark them resolved, and use the Message Board for live conversation about each ticket.',
+    title: 'Tickets',
+    body: 'Create tickets with photos, due dates, and tags. Change status between Open, In Progress, and Completed. Comment on any ticket.',
   },
   {
     id: 'contacts',
     icon: 'people-outline',
-    title: 'Contacts + Assignments',
-    body: 'Use Contacts to call people quickly and view unit assignments for PMs/designers.',
+    title: 'Contacts',
+    body: 'Search and filter contacts by role or specialty. Tap to call or view assigned units.',
   },
   {
     id: 'notifications',
     icon: 'notifications-outline',
     title: 'Notifications',
-    body: 'Tap the bell badge to open updates. Ticket alerts deep-link directly to the ticket.',
+    body: 'Get notified when tickets are created, assigned, or commented on. Swipe to dismiss.',
   },
   {
     id: 'demo',
     icon: 'hand-left-outline',
-    title: 'Quick Interactive Demo',
-    body: 'After this, we will highlight key Home actions so you can tap through them once.',
+    title: 'Quick Demo',
+    body: 'Next, we\'ll highlight a few key actions on Home so you can try them out.',
   },
 ];
 
 export default function OnboardingScreen() {
+  const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<Slide>>(null);
   const [index, setIndex] = useState(0);
 
@@ -71,7 +73,7 @@ export default function OnboardingScreen() {
   const current = useMemo(() => SLIDES[index] ?? SLIDES[0], [index]);
 
   const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / screenWidth);
     setIndex(Math.max(0, Math.min(SLIDES.length - 1, nextIndex)));
   };
 
@@ -98,9 +100,15 @@ export default function OnboardingScreen() {
       <View style={styles.topRow}>
         <Text style={styles.progress}>{index + 1}/{SLIDES.length}</Text>
         {!atEnd ? (
-          <TouchableOpacity onPress={finish}>
+          <Pressable
+            onPress={finish}
+            hitSlop={MIN_TOUCH_SLOP}
+            style={({ pressed }) => [styles.skipWrap, pressed && styles.skipPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Skip onboarding"
+          >
             <Text style={styles.skip}>Skip</Text>
-          </TouchableOpacity>
+          </Pressable>
         ) : <View style={{ width: 40 }} />}
       </View>
 
@@ -112,8 +120,10 @@ export default function OnboardingScreen() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={handleScrollEnd}
+        style={styles.slidesList}
+        contentContainerStyle={styles.slidesListContent}
         renderItem={({ item }) => (
-          <View style={styles.slide}>
+          <View style={[styles.slide, { width: screenWidth }]}>
             <View style={styles.iconWrap}>
               <Ionicons name={item.icon} size={40} color="#f2681c" />
             </View>
@@ -131,9 +141,15 @@ export default function OnboardingScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerHint}>{current.title}</Text>
-        <TouchableOpacity style={styles.nextButton} onPress={goNext}>
+        <Pressable
+          onPress={goNext}
+          style={({ pressed }) => [styles.nextButton, pressed && styles.nextButtonPressed]}
+          hitSlop={MIN_TOUCH_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel={atEnd ? 'Start Using Fireside' : 'Next'}
+        >
           <Text style={styles.nextButtonText}>{atEnd ? 'Start Using Fireside' : 'Next'}</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
     </SafeAreaView>
   );
@@ -142,7 +158,7 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#3b3b3b',
+    backgroundColor: '#2e2e2e',
   },
   topRow: {
     flexDirection: 'row',
@@ -155,13 +171,29 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     fontSize: 13,
   },
+  skipWrap: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  skipPressed: {
+    opacity: 0.7,
+  },
   skip: {
     color: '#f2681c',
     fontSize: 14,
     fontWeight: '600',
   },
+  slidesList: {
+    flex: 1,
+  },
+  slidesListContent: {
+    flexGrow: 1,
+  },
   slide: {
-    width: SCREEN_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 28,
@@ -218,7 +250,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2681c',
     borderRadius: 10,
     paddingVertical: 14,
+    minHeight: 48,
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  nextButtonPressed: {
+    opacity: 0.9,
   },
   nextButtonText: {
     color: '#fff',

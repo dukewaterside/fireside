@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet } from 'react-native'; 
 import { Tabs, router } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,34 +26,25 @@ export default function TabsLayout() {
     useCallback(() => {
       let mounted = true;
       (async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          if (mounted) setUnreadCount(0);
-          return; // No redirect: tabs stay visible with sign-in prompts
-        }
-        // Redirect pending/denied users to approval screen (e.g. reopened app after status change)
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('status')
-          .eq('id', session.user.id)
-          .single();
-        const status = profile?.status ?? 'active';
-        if (mounted && status === 'pending') {
-          router.replace('/pending-approval');
-          return;
-        }
-        if (mounted && status === 'denied') {
-          router.replace('/pending-approval?status=denied');
-          return;
-        }
-        if (mounted && status === 'active') {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            if (mounted) setUnreadCount(0);
+            return; // No redirect: tabs stay visible with sign-in prompts
+          }
+
           registerAndSavePushToken().catch(() => {});
+
+          // Only count this user's unread notifications (avoid large-table counts)
+          const { count, error } = await supabase
+            .from('notifications')
+            .select('*', { count: 'exact', head: true })
+            .eq('recipient_id', session.user.id)
+            .is('read_at', null);
+          if (mounted && !error) setUnreadCount(count ?? 0);
+        } catch {
+          if (mounted) setUnreadCount(0);
         }
-        const { count, error } = await supabase
-          .from('notifications')
-          .select('*', { count: 'exact', head: true })
-          .is('read_at', null);
-        if (mounted && !error) setUnreadCount(count ?? 0);
       })();
       return () => { mounted = false; };
     }, [])
@@ -73,7 +64,7 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#3b3b3b',
+          backgroundColor: '#2e2e2e',
           borderTopColor: '#4a4a4a',
           borderTopWidth: 1,
           height: 80,
@@ -147,5 +138,5 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  loadingRoot: { flex: 1, backgroundColor: '#3b3b3b', justifyContent: 'center', alignItems: 'center' },
+  loadingRoot: { flex: 1, backgroundColor: '#2e2e2e', justifyContent: 'center', alignItems: 'center' },
 });
