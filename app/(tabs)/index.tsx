@@ -355,6 +355,7 @@ export default function HomeScreen() {
         const { count, error } = await supabase
           .from('notifications')
           .select('*', { count: 'exact', head: true })
+          .eq('recipient_id', session.user.id)
           .is('read_at', null);
         if (mounted && !error) setUnreadCount(count ?? 0);
       })();
