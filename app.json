@@ -15,9 +15,10 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.fireside.southpeak",
       "infoPlist": {
+        "UIDeviceFamily": [1],
         "NSCameraUsageDescription": "This app needs access to your camera to capture photos of building elements.",
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select images for reports.",
         "ITSAppUsesNonExemptEncryption": false
